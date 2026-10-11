@@ -99,9 +99,14 @@ class TelegramNotifier:
                 f"• Summary: {visual_data.get('summary')}"
             )
 
+        strategy_name = signal.get("strategy", "Confluence Engine")
+        is_a_plus = (grade == "A+")
+        banner = "⭐ <b>[GRADE A+ PRIME SETUP]</b> ⭐\n" if is_a_plus else ""
+
         msg = f"""
-⚡ <b>NEW TRADING SIGNAL: {symbol}</b> ({tf})
+{banner}⚡ <b>NEW TRADING SIGNAL: {symbol}</b> ({tf})
 {emoji} | <b>Grade: {grade} ({score}/100)</b>
+🎯 <b>Strategy:</b> <code>{strategy_name}</code>
 
 ━━━━━━━━━━━━━━━━━━━
 📍 <b>Entry:</b> <code>{entry}</code>

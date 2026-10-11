@@ -323,9 +323,15 @@ class ConfluenceAnalyzer:
         total_score = round(min(max(total_score, 0), 100), 1)
 
         grade = "C"
-        if total_score >= self.config.get("scoring", {}).get("min_grade_a", 75):
+        min_a_plus = self.config.get("scoring", {}).get("min_grade_a_plus", 85)
+        min_a = self.config.get("scoring", {}).get("min_grade_a", 75)
+        min_b = self.config.get("scoring", {}).get("min_grade_b", 68)
+
+        if total_score >= min_a_plus:
+            grade = "A+"
+        elif total_score >= min_a:
             grade = "A"
-        elif total_score >= self.config.get("scoring", {}).get("min_grade_b", 60):
+        elif total_score >= min_b:
             grade = "B"
 
         reasons = [
