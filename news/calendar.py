@@ -52,12 +52,16 @@ class NewsFilter:
 
         events = self.fetch_calendar()
         if not events:
-            # Fallback if feed fails: mark reduced confidence
+            # Hardened Fail-Closed requirement:
+            # If the economic calendar cannot be verified, suppress trading signals
+            # to prevent executing ahead of unmonitored high-impact news releases (CPI/NFP/FOMC).
+            fail_closed = self.config.get("fail_closed_on_error", True)
             return {
-                "is_safe": True,
+                "is_safe": not fail_closed,
                 "active_warning": True,
-                "upcoming_event": "Calendar feed unavailable (Caution: proceed with reduced confidence)",
-                "feed_ok": False
+                "upcoming_event": "CALENDAR_UNAVAILABLE_FAIL_CLOSED: News feed unreachable. Signals suppressed for safety.",
+                "feed_ok": False,
+                "reason": "CALENDAR_UNAVAILABLE_FAIL_CLOSED"
             }
 
         relevant_currency = "USD"

@@ -61,8 +61,19 @@ class Backtester:
 
                 # Long management
                 if direction == "LONG":
+                    # Conservative simultaneous touch handling:
+                    # If both SL and TP are within the bar range, assume worst-case (SL hit first)
+                    if low <= sl and high >= tp2:
+                        active_trade['exit_price'] = sl - slippage
+                        active_trade['exit_time'] = current_bar.name
+                        active_trade['pnl_r'] = -1.0
+                        active_trade['outcome'] = "SL_CONSERVATIVE_AMBIGUOUS_BAR"
+                        trades.append(active_trade)
+                        active_trade = None
+                        cooldown_bars = min_cooldown
+                        continue
                     # Check stop loss hit
-                    if low <= sl:
+                    elif low <= sl:
                         loss_r = -1.0
                         active_trade['exit_price'] = sl - slippage
                         active_trade['exit_time'] = current_bar.name
@@ -89,7 +100,17 @@ class Backtester:
 
                 # Short management
                 elif direction == "SHORT":
-                    if high >= sl:
+                    # Conservative simultaneous touch handling
+                    if high >= sl and low <= tp2:
+                        active_trade['exit_price'] = sl + slippage
+                        active_trade['exit_time'] = current_bar.name
+                        active_trade['pnl_r'] = -1.0
+                        active_trade['outcome'] = "SL_CONSERVATIVE_AMBIGUOUS_BAR"
+                        trades.append(active_trade)
+                        active_trade = None
+                        cooldown_bars = min_cooldown
+                        continue
+                    elif high >= sl:
                         loss_r = -1.0
                         active_trade['exit_price'] = sl + slippage
                         active_trade['exit_time'] = current_bar.name

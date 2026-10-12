@@ -23,12 +23,13 @@ class SignalTracker:
 
     def _init_db(self):
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.executescript("""
             CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 timeframe TEXT NOT NULL,
+                strategy TEXT DEFAULT 'Confluence Engine',
                 direction TEXT NOT NULL,
                 entry REAL NOT NULL,
                 stop_loss REAL NOT NULL,
@@ -41,37 +42,70 @@ class SignalTracker:
                 status TEXT NOT NULL, -- 'OPEN', 'TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'SL_HIT', 'INVALIDATED', 'EXPIRED'
                 outcome_r REAL DEFAULT 0.0,
                 closed_at TEXT,
+                data_source TEXT DEFAULT 'Yahoo GC=F',
+                dedup_key TEXT UNIQUE,
                 visual_bias TEXT,
                 visual_confidence INTEGER
-            )
+            );
+
+            CREATE TABLE IF NOT EXISTS journal_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                strategy TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                status TEXT NOT NULL, -- 'APPROVED', 'RISK_REJECTED', 'NEWS_BLOCKED', 'STALE_DATA_BLOCKED'
+                confluence_score REAL,
+                rejection_reason TEXT,
+                details TEXT
+            );
             """)
             conn.commit()
+
+    def log_journal_entry(self, symbol: str, strategy: str, direction: str, status: str, confluence_score: float, rejection_reason: Optional[str] = None, details: Optional[str] = None):
+        now_str = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            conn.execute("""
+            INSERT INTO journal_entries (timestamp, symbol, strategy, direction, status, confluence_score, rejection_reason, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (now_str, symbol, strategy, direction, status, confluence_score, rejection_reason, details))
+            conn.commit()
+
+    def is_duplicate_signal(self, dedup_key: str) -> bool:
+        with self._get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM signals WHERE dedup_key = ?", (dedup_key,))
+            return cur.fetchone() is not None
 
     def log_new_signal(self, signal: Dict[str, Any], visual_data: Optional[Dict[str, Any]] = None) -> int:
         now_str = datetime.now(timezone.utc).isoformat()
         vis_bias = visual_data.get("bias") if visual_data else None
         vis_conf = visual_data.get("confidence") if visual_data else None
+        dedup_key = signal.get("dedup_key")
 
         with self._get_conn() as conn:
             cur = conn.cursor()
             cur.execute("""
             INSERT INTO signals (
-                timestamp, symbol, timeframe, direction, entry, stop_loss, tp1, tp2, tp3,
-                lot_size, confluence_score, grade, status, outcome_r, visual_bias, visual_confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 0.0, ?, ?)
+                timestamp, symbol, timeframe, strategy, direction, entry, stop_loss, tp1, tp2, tp3,
+                lot_size, confluence_score, grade, status, outcome_r, data_source, dedup_key, visual_bias, visual_confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 0.0, ?, ?, ?, ?)
             """, (
                 now_str,
                 signal["symbol"],
                 signal["timeframe"],
+                signal.get("strategy", "Confluence Engine"),
                 signal["direction"],
                 signal["entry"],
                 signal["stop_loss"],
                 signal["tp1"],
                 signal["tp2"],
                 signal.get("tp3"),
-                signal["suggested_lot_size"],
+                signal.get("suggested_lot_size", 0.01),
                 signal["confluence_score"],
                 signal["grade"],
+                signal.get("data_source", "Yahoo GC=F"),
+                dedup_key,
                 vis_bias,
                 vis_conf
             ))

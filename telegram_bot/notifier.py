@@ -103,28 +103,32 @@ class TelegramNotifier:
         is_a_plus = (grade == "A+")
         banner = "⭐ <b>[GRADE A+ PRIME SETUP]</b> ⭐\n" if is_a_plus else ""
 
-        # Map confluence score to statistical probability tier
+        # Map confluence score to technical confluence grade tiers (Rule-based, not calibrated win rate)
         if score >= 90:
-            prob_tier = "🔥 Ultra-Strong Prime (Estimated Historical Probability: 75%–80%)"
+            quality_tier = "🔥 Tier-1 Exceptional Confluence (Multiple HTF + SMC + Fib Alignments)"
         elif score >= 85:
-            prob_tier = "💎 Strong A+ Setup (Estimated Historical Probability: 68%–74%)"
+            quality_tier = "💎 Grade A+ Prime Setup (Confluence Threshold Satisfied: ≥85 pts)"
         else:
-            prob_tier = "⚡ Standard High Setup (Estimated Historical Probability: 60%–67%)"
+            quality_tier = "⚡ Secondary Grade Setup (Educational / Monitor Only)"
+
+        source_info = signal.get("data_source", "Yahoo GC=F (Reference Futures)")
+        risk_mode = signal.get("account_type", "Standard 100oz (Demo Forward-Test)")
 
         msg = f"""
-{banner}⚡ <b>NEW TRADING SIGNAL: {symbol}</b> ({tf})
-{emoji} | <b>Grade: {grade} (Confluence Score: {score}/100)</b>
-📊 <b>Setup Strength:</b> {prob_tier}
+{banner}⚡ <b>SIGNAL ALERT: {symbol}</b> ({tf})
+{emoji} | <b>Grade: {grade} (Confluence: {score}/100 pts)</b>
+📊 <b>Quality Assessment:</b> {quality_tier}
 🎯 <b>Strategy:</b> <code>{strategy_name}</code>
+📡 <b>Data Feed:</b> <code>{source_info}</code>
 
 ━━━━━━━━━━━━━━━━━━━
 📍 <b>Entry:</b> <code>{entry}</code>
 🛑 <b>Stop Loss:</b> <code>{sl}</code>
 🎯 <b>TP1 (1.0R):</b> <code>{tp1}</code> (Move SL to BE)
 🎯 <b>TP2 (2.0R):</b> <code>{tp2}</code> (Core Target)
-🎯 <b>TP3 (3.5R):</b> <code>{tp3}</code> (Runner)
-⚖️ <b>Risk:Reward:</b> 1:{rr}
-📦 <b>Suggested Lot Size:</b> <code>{lot}</code> (based on risk cfg)
+🎯 <b>TP3 (3.5R):</b> <code>{tp3}</code> (Runner Target)
+⚖️ <b>Planned R:R:</b> 1:{rr}
+📦 <b>Sizing Note:</b> <code>{lot}</code> lots ({risk_mode})
 ━━━━━━━━━━━━━━━━━━━
 
 🧠 <b>Confluence Factors:</b>

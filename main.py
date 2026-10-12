@@ -51,9 +51,14 @@ def run_cycle():
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
+    from risk.hardened_manager import HardenedRiskManager
+    from strategy.modules import ALL_STRATEGIES
+    import hashlib
+
     provider = get_data_provider("yfinance")
     analyzer = ConfluenceAnalyzer(config)
     risk_mgr = RiskManager(config)
+    hardened_risk = HardenedRiskManager(config)
     news_filter = NewsFilter(config)
     chart_gen = ChartGenerator()
     ai_reader = VisualAIReader()
@@ -90,60 +95,121 @@ def run_cycle():
 
         symbol_yf = sym_info.get("symbol_yf", "GC=F")
         try:
-            # 1. Fetch Entry Timeframe
-            df_entry = provider.fetch_ohlcv(symbol_yf, entry_tf, limit=300)
+            # 1. Fetch Entry Timeframe & Validate Candles (Enforces closed candles, chronological order, non-stale)
+            df_entry, data_meta = provider.fetch_ohlcv(symbol_yf, entry_tf, limit=300)
+            if df_entry is None or df_entry.empty:
+                logger.warning(f"No valid data returned for {sym_name} ({entry_tf}). Skipping.")
+                continue
+
             df_entry_ind = calculate_all_indicators(df_entry)
 
-            # 2. Confluence Analysis
+            # 2. Confluence Analysis & Market Regime
             confluence = analyzer.calculate_confluence(df_entry_ind, sym_name)
-            logger.info(f"{sym_name} Analysis -> Score: {confluence['total_score']} | Grade: {confluence['grade']} | Bias: {confluence['bias']}")
+            regime = confluence.get("regime", "TRENDING")
+            total_score = confluence["total_score"]
+            grade = confluence["grade"]
+            logger.info(f"{sym_name} Analysis -> Score: {total_score} | Grade: {grade} | Regime: {regime} | Bias: {confluence['bias']}")
 
             # Check if live alerts are enabled or in test review
             live_allowed = sym_info.get("live_enabled", False)
             if not live_allowed:
                 logger.info(f"{sym_name} live signals are locked by Quality Gate (Forward testing mode).")
 
-            if confluence["is_tradeable"]:
+            # 3. Evaluate 8 Modular Strategies
+            strategy_candidate = None
+            for strat in ALL_STRATEGIES:
+                sig = strat.evaluate(df_entry_ind, sym_name, regime)
+                if sig is not None:
+                    strategy_candidate = sig
+                    logger.info(f"Matched strategy module: '{strat.name}' for {sym_name} ({sig['direction']})")
+                    break
+
+            # If no specific modular strategy triggered, fallback to high-confluence baseline if Grade A+
+            if strategy_candidate is None and confluence["is_tradeable"]:
                 bias = confluence["bias"]
                 curr_price = df_entry_ind.iloc[-1]["close"]
                 atr = df_entry_ind.iloc[-1]["atr_14"]
-                
                 levels = risk_mgr.calculate_trade_levels(sym_name, bias, curr_price, atr)
-                if not levels:
-                    logger.info(f"Risk filter rejected setup for {sym_name} (Spread or R:R constraint).")
-                    continue
+                if levels:
+                    strategy_candidate = {
+                        "strategy": "Confluence Core Alignment",
+                        "direction": bias,
+                        **levels,
+                        "reason": "; ".join(confluence.get("reasons", []))
+                    }
 
-                signal_dict = {
-                    "symbol": sym_name,
-                    "timeframe": entry_tf,
-                    "direction": bias,
-                    **levels,
-                    "confluence_score": confluence["total_score"],
-                    "grade": confluence["grade"]
-                }
+            if not strategy_candidate:
+                tracker.log_journal_entry(sym_name, "None", confluence["bias"], "NO_SETUP_TRIGGERED", total_score)
+                continue
 
-                # 3. News Check
-                news_status = news_filter.check_news_status(sym_name)
-                if not news_status["is_safe"]:
-                    logger.warning(f"Trade skipped due to imminent high impact news: {news_status['upcoming_event']}")
-                    continue
+            bias = strategy_candidate["direction"]
+            entry = strategy_candidate["entry"]
+            stop_loss = strategy_candidate["stop_loss"]
+            tp1 = strategy_candidate["tp1"]
+            tp2 = strategy_candidate["tp2"]
+            tp3 = strategy_candidate.get("tp3", tp2)
 
-                # 4. Generate Chart Image
-                chart_path = chart_gen.render_signal_chart(df_entry_ind, sym_name, entry_tf, signal_dict)
-                logger.info(f"Rendered technical chart: {chart_path}")
+            # 4. Hardened Risk & Position Sizing Gate ($50 / 0.25% ceiling check)
+            sizing_res = hardened_risk.evaluate_signal_risk(sym_name, entry, stop_loss, tp2)
+            if not sizing_res["approved"]:
+                rejection_msg = f"RISK REJECTED: {sizing_res['reason']}"
+                logger.warning(f"{sym_name} setup rejected by Hardened Risk Manager: {sizing_res['reason']}")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "RISK_REJECTED", total_score, sizing_res["reason"], str(sizing_res))
+                continue
 
-                # 5. Visual AI Second Opinion
-                visual_res = ai_reader.analyze_chart_image(chart_path, sym_name, entry_tf)
+            # 5. News Calendar Filter (Fail-Closed)
+            news_status = news_filter.check_news_status(sym_name)
+            if not news_status["is_safe"]:
+                logger.warning(f"Trade skipped due to news filter: {news_status['upcoming_event']}")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "NEWS_BLOCKED", total_score, news_status.get("reason", "HIGH_IMPACT_NEWS"))
+                continue
 
-                # 6. Dispatch Alert to Telegram
-                msg_text = notifier.format_signal_message(signal_dict, confluence, news_status, visual_res)
-                if live_allowed or os.environ.get("FORCE_DISPATCH"):
-                    notifier.send_photo(chart_path, caption=f"Chart Analysis: {sym_name} ({entry_tf})")
-                    notifier.send_message(msg_text)
+            # 6. Deduplication Check
+            last_candle_time = str(df_entry_ind.index[-1])
+            dedup_raw = f"{sym_name}_{strategy_candidate['strategy']}_{entry_tf}_{bias}_{last_candle_time}"
+            dedup_key = hashlib.sha256(dedup_raw.encode()).hexdigest()
 
-                # 7. Log to SQLite Tracker
-                tracker.log_new_signal(signal_dict, visual_res)
-                logger.info(f"Successfully recorded signal for {sym_name} into tracker.")
+            if tracker.is_duplicate_signal(dedup_key):
+                logger.info(f"Duplicate signal detected for {sym_name} (already alerted on this candle). Skipping.")
+                continue
+
+            # 7. Construct Final Signal Dict
+            signal_dict = {
+                "symbol": sym_name,
+                "timeframe": entry_tf,
+                "strategy": strategy_candidate["strategy"],
+                "direction": bias,
+                "entry": entry,
+                "stop_loss": stop_loss,
+                "tp1": tp1,
+                "tp2": tp2,
+                "tp3": tp3,
+                "risk_reward_tp2": sizing_res["planned_rr"],
+                "suggested_lot_size": sizing_res["lot_size"],
+                "account_type": "Cent Account Mode" if sizing_res.get("requires_cent_account") else "Standard Account",
+                "confluence_score": total_score,
+                "grade": grade,
+                "data_source": "Yahoo GC=F (Reference Futures)",
+                "dedup_key": dedup_key
+            }
+
+            # 8. Generate Technical Chart
+            chart_path = chart_gen.render_signal_chart(df_entry_ind, sym_name, entry_tf, signal_dict)
+            logger.info(f"Rendered technical chart: {chart_path}")
+
+            # 9. Visual AI Second Opinion
+            visual_res = ai_reader.analyze_chart_image(chart_path, sym_name, entry_tf)
+
+            # 10. Dispatch Alert to Telegram
+            msg_text = notifier.format_signal_message(signal_dict, confluence, news_status, visual_res)
+            if live_allowed or os.environ.get("FORCE_DISPATCH"):
+                notifier.send_photo(chart_path, caption=f"Chart Analysis: {sym_name} ({entry_tf})")
+                notifier.send_message(msg_text)
+
+            # 11. Log to Tracker
+            tracker.log_new_signal(signal_dict, visual_res)
+            tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "APPROVED", total_score, None, f"RR: {sizing_res['planned_rr']}")
+            logger.info(f"Successfully recorded Grade {grade} signal for {sym_name} into tracker.")
 
         except Exception as e:
             logger.error(f"Error processing {sym_name}: {e}", exc_info=True)

@@ -87,9 +87,13 @@ class ChartGenerator:
             if tp3:
                 ax_main.axhline(tp3, color='#00e676', linestyle='-.', linewidth=1.2, label=f'TP3: {tp3}')
 
+        data_source = signal_data.get("data_source", "Yahoo Finance GC=F [Reference Futures]") if signal_data else "Market Data Feed"
         ax_main.grid(True, color='#2a2e39', linestyle='--', alpha=0.5)
         ax_main.tick_params(colors='#d1d4dc')
-        ax_main.set_title(f"{symbol} ({timeframe}) — Gold Signal Pro Technical Analysis", color='#ffffff', fontsize=13, fontweight='bold', pad=12)
+        ax_main.set_title(
+            f"{symbol} ({timeframe}) — Gold Signal Pro Technical Analysis\n[Source: {data_source}] (Demo Forward Testing)",
+            color='#ffffff', fontsize=12, fontweight='bold', pad=12
+        )
         ax_main.legend(loc='upper left', facecolor='#1e222d', edgecolor='#2a2e39', labelcolor='#d1d4dc', fontsize=8)
 
         # RSI Panel
