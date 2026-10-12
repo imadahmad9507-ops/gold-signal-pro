@@ -26,23 +26,47 @@ class HardenedRiskManager:
     def get_contract_spec(self, symbol: str) -> Dict[str, Any]:
         """
         Returns full contract specification for the instrument.
-        Matches Exness standard account specifications.
+        Matches authoritative Exness contract specifications:
+        - XAUUSD (Standard Account): Contract size = 100 oz, min lot = 0.01 lot, currency = USD.
+        - XAUUSDc (Cent Account): Contract size = 1 oz (or 100 oz priced in US Cents / USC),
+          where 1 cent lot = 1/100th of standard lot. Account currency is USC (100 USC = 1 USD).
         """
         inst = self.instruments_cfg.get(symbol, {})
         asset_type = inst.get("asset_type", "commodity")
 
-        if "XAU" in symbol or "GC" in symbol:
+        # Exness Standard Gold CFD
+        if symbol == "XAUUSD" or symbol == "GC=F":
             return {
                 "symbol": symbol,
-                "contract_size": 100.0,  # 1 standard lot = 100 troy ounces
+                "contract_size": 100.0,       # 1 standard lot = 100 troy oz
                 "min_lot": 0.01,
                 "lot_step": 0.01,
-                "max_lot": 10.0,
-                "pip_size": 0.01,       # $0.01 is 1 point / tick
-                "pip_value_per_lot": 1.0, # $1.00 per $0.01 move on 1.0 lot
+                "max_lot": 20.0,
+                "tick_size": 0.01,            # $0.01 price step
+                "tick_value_per_lot": 1.0,    # $1.00 per $0.01 move on 1.0 lot
                 "typical_spread": inst.get("typical_spread_pips", 0.25), # in USD
-                "commission_per_lot": inst.get("commission_per_lot", 0.0), # Exness standard accounts have 0 commission, spread only
-                "estimated_slippage": inst.get("estimated_slippage", 0.10)
+                "commission_per_lot": inst.get("commission_per_lot", 0.0),
+                "estimated_slippage": inst.get("estimated_slippage", 0.10),
+                "account_currency": "USD",
+                "is_cent_account": False,
+                "exchange_rate_to_usd": 1.0
+            }
+        # Exness Cent Account Gold CFD (Official symbol: XAUUSDc)
+        elif symbol == "XAUUSDc":
+            return {
+                "symbol": symbol,
+                "contract_size": 1.0,         # 1 cent lot = 1 troy oz (1/100th of standard 100 oz)
+                "min_lot": 0.01,
+                "lot_step": 0.01,
+                "max_lot": 200.0,
+                "tick_size": 0.01,
+                "tick_value_per_lot": 0.01,   # $0.01 per $0.01 move on 1.0 cent lot (in USD terms)
+                "typical_spread": inst.get("typical_spread_pips", 0.35), # slightly wider cent spread
+                "commission_per_lot": 0.0,
+                "estimated_slippage": 0.10,
+                "account_currency": "USC",    # US Cents (1 USD = 100 USC)
+                "is_cent_account": True,
+                "exchange_rate_to_usd": 0.01  # 1 USC = 0.01 USD
             }
         elif asset_type == "forex":
             return {
@@ -51,11 +75,14 @@ class HardenedRiskManager:
                 "min_lot": 0.01,
                 "lot_step": 0.01,
                 "max_lot": 20.0,
-                "pip_size": 0.0001,
-                "pip_value_per_lot": 10.0,
+                "tick_size": 0.0001,
+                "tick_value_per_lot": 10.0,
                 "typical_spread": inst.get("typical_spread_pips", 0.00015),
                 "commission_per_lot": 0.0,
-                "estimated_slippage": 0.00005
+                "estimated_slippage": 0.00005,
+                "account_currency": "USD",
+                "is_cent_account": False,
+                "exchange_rate_to_usd": 1.0
             }
         elif asset_type == "crypto":
             return {
@@ -64,25 +91,21 @@ class HardenedRiskManager:
                 "min_lot": 0.01,
                 "lot_step": 0.01,
                 "max_lot": 5.0,
-                "pip_size": 1.0,
-                "pip_value_per_lot": 1.0,
+                "tick_size": 1.0,
+                "tick_value_per_lot": 1.0,
                 "typical_spread": inst.get("typical_spread_pips", 15.0),
                 "commission_per_lot": 0.0,
-                "estimated_slippage": 5.0
+                "estimated_slippage": 5.0,
+                "account_currency": "USD",
+                "is_cent_account": False,
+                "exchange_rate_to_usd": 1.0
             }
 
-        # Fallback default
+        # If instrument is unknown or missing required specifications, reject rather than guessing
         return {
             "symbol": symbol,
-            "contract_size": 100.0,
-            "min_lot": 0.01,
-            "lot_step": 0.01,
-            "max_lot": 1.0,
-            "pip_size": 0.01,
-            "pip_value_per_lot": 1.0,
-            "typical_spread": 0.50,
-            "commission_per_lot": 0.0,
-            "estimated_slippage": 0.10
+            "is_unsupported": True,
+            "reason": f"MISSING_CONTRACT_SPEC: Instrument '{symbol}' has no verified broker specifications."
         }
 
     def evaluate_and_size_trade(
@@ -116,11 +139,20 @@ class HardenedRiskManager:
             }
 
         spec = self.get_contract_spec(symbol)
+        if spec.get("is_unsupported"):
+            return {
+                "approved": False,
+                "rejection_code": "MISSING_CONTRACT_SPEC",
+                "reason": spec.get("reason", f"Contract specifications for {symbol} are unverified.")
+            }
+
         contract_size = spec["contract_size"]
         min_lot = spec["min_lot"]
         typical_spread = spec["typical_spread"]
         slippage = spec["estimated_slippage"]
         commission = spec["commission_per_lot"]
+        fx_to_usd = spec.get("exchange_rate_to_usd", 1.0)
+        is_cent = spec.get("is_cent_account", False)
 
         # 2. Distance and direction sanity check
         if bias == "LONG":
@@ -172,38 +204,42 @@ class HardenedRiskManager:
                 "reason": f"Effective R:R (1:{effective_rr}) is below required minimum (1:{min_rr})"
             }
 
-        # 5. Position Sizing & Strict Monetary Limit Check
-        # Loss per 1.0 standard lot = total_risk_dist * contract_size + commission
-        loss_per_standard_lot = (total_risk_dist * contract_size) + commission
+        # 5. Position Sizing & Monetary Limit Check in USD terms:
+        # Loss per lot in instrument currency:
+        loss_per_lot_native = (total_risk_dist * contract_size) + commission
+        # Converted to USD account currency:
+        loss_per_lot_usd = loss_per_lot_native * fx_to_usd
         
-        # Theoretical ideal volume to risk exactly max_monetary_risk:
-        ideal_lot = max_monetary_risk / (loss_per_standard_lot + 1e-9)
+        # Ideal lot to risk exactly max_monetary_risk ($0.125):
+        ideal_lot = max_monetary_risk / (loss_per_lot_usd + 1e-9)
 
-        # Expected loss at broker's absolute minimum volume (e.g. 0.01 lot)
-        loss_at_min_volume = round(min_lot * loss_per_standard_lot, 3)
+        # Expected loss at broker's absolute minimum volume (0.01 lot) in USD:
+        loss_at_min_volume = round(min_lot * loss_per_lot_usd, 4)
 
-        # If even the minimum trade size (0.01 lot) risks more than our allowed dollar budget ($0.125):
+        # If even minimum trade size (0.01 lot) risks more than our allowed dollar budget ($0.125):
         if loss_at_min_volume > max_monetary_risk:
-            # Under strict demo/live capital protection, reject unachievable risk ceiling!
             logger.info(
-                f"[{symbol}] Trade rejected: Minimum 0.01 lot risks ${loss_at_min_volume:.2f}, "
+                f"[{symbol}] Trade rejected: Minimum {min_lot} lot risks ${loss_at_min_volume:.2f}, "
                 f"which exceeds the configured ${max_monetary_risk:.3f} (0.25% of ${balance}) ceiling."
             )
             return {
                 "approved": False,
                 "rejection_code": "RISK_LIMIT_UNACHIEVABLE_AT_MINIMUM_SIZE",
                 "reason": (
-                    f"Minimum broker size ({min_lot} lot) incurs ${loss_at_min_volume:.2f} risk, "
+                    f"Minimum broker size ({min_lot} lot) incurs ${loss_at_min_volume:.3f} risk, "
                     f"exceeding your strict ${max_monetary_risk:.3f} (0.25% of ${balance:.2f}) risk ceiling."
                 ),
                 "loss_at_min_volume": loss_at_min_volume,
                 "max_monetary_risk": max_monetary_risk,
                 "minimum_lot_size": min_lot,
-                "requires_cent_account": True
+                "requires_cent_account": not is_cent
             }
 
-        # If minimum lot size is within risk limits, assign the clamped safe lot size
-        safe_lot = round(max(ideal_lot, min_lot), 2)
+        # Round DOWN (floor) to nearest lot_step (0.01) so risk ceiling is NEVER exceeded:
+        import math
+        lot_step = spec.get("lot_step", 0.01)
+        safe_lot = max(min_lot, math.floor(ideal_lot / lot_step) * lot_step)
+        safe_lot = round(safe_lot, 2)
 
         # Derive TP ladder
         tp1 = proposed_tp1 if proposed_tp1 else (entry_price + (1.0 * raw_risk_dist) if bias == "LONG" else entry_price - (1.0 * raw_risk_dist))
@@ -222,7 +258,7 @@ class HardenedRiskManager:
             "raw_risk_distance": round(raw_risk_dist, 2),
             "effective_rr": effective_rr,
             "suggested_lot_size": safe_lot,
-            "expected_dollar_loss": round(safe_lot * loss_per_standard_lot, 2),
+            "expected_dollar_loss": round(safe_lot * loss_per_lot_usd, 4),
             "max_allowed_dollar_risk": max_monetary_risk
         }
 
@@ -236,33 +272,12 @@ class HardenedRiskManager:
     ) -> Dict[str, Any]:
         """
         Convenience evaluator for pipeline integration.
+        Routes to XAUUSDc if is_cent_account is set.
         """
         bias = "LONG" if tp2 > entry else "SHORT"
-        
-        # If cent account, contract size is 1 oz instead of 100 oz (1/100th scale)
-        if is_cent_account:
-            orig_spec = self.get_contract_spec(symbol)
-            # Temporarily adjust contract size for cent account calculation
-            balance = float(self.risk_cfg.get("account_balance_usd", 50.0))
-            risk_pct = float(self.risk_cfg.get("risk_per_trade_percent", 0.25))
-            max_monetary_risk = round(balance * (risk_pct / 100.0), 4)
-            raw_risk = abs(entry - stop_loss)
-            reward = abs(tp2 - entry)
-            rr = round(reward / (raw_risk + 0.25 + 0.10), 2)
-            # Cent lot: 0.01 lot of 1 oz = 0.01 oz = $0.01 per dollar move
-            dollar_risk = round(0.01 * (raw_risk + 0.35), 4)
-            approved = (dollar_risk <= max_monetary_risk) and (rr >= float(self.risk_cfg.get("min_risk_reward", 2.5)))
-            return {
-                "approved": approved,
-                "reason": "OK" if approved else "RR_OR_RISK_LIMIT_EXCEEDED",
-                "planned_rr": rr,
-                "lot_size": 0.01,
-                "dollar_risk": dollar_risk,
-                "requires_cent_account": False,
-                "is_cent_account": True
-            }
+        target_symbol = "XAUUSDc" if (is_cent_account and ("XAU" in symbol or "GC" in symbol)) else symbol
 
-        res = self.evaluate_and_size_trade(symbol, bias, entry, stop_loss, tp2)
+        res = self.evaluate_and_size_trade(target_symbol, bias, entry, stop_loss, tp2)
         if res["approved"]:
             return {
                 "approved": True,
@@ -270,7 +285,8 @@ class HardenedRiskManager:
                 "planned_rr": res["effective_rr"],
                 "lot_size": res["suggested_lot_size"],
                 "dollar_risk": res["expected_dollar_loss"],
-                "requires_cent_account": False
+                "requires_cent_account": False,
+                "is_cent_account": is_cent_account
             }
         else:
             code = res.get("rejection_code", "REJECTED")
@@ -281,5 +297,6 @@ class HardenedRiskManager:
                 "planned_rr": 0.0,
                 "lot_size": 0.0,
                 "dollar_risk": res.get("loss_at_min_volume", 0.0),
-                "requires_cent_account": res.get("requires_cent_account", False)
+                "requires_cent_account": res.get("requires_cent_account", False),
+                "is_cent_account": is_cent_account
             }

@@ -200,16 +200,20 @@ def run_cycle():
             # 9. Visual AI Second Opinion
             visual_res = ai_reader.analyze_chart_image(chart_path, sym_name, entry_tf)
 
-            # 10. Dispatch Alert to Telegram
+            # 10. Persist Signal to Tracker FIRST (Atomic gate: Prevents alert dispatch if duplicate or write fails)
+            try:
+                sig_id = tracker.log_new_signal(signal_dict, visual_res)
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "APPROVED", total_score, None, f"RR: {sizing_res['planned_rr']}")
+                logger.info(f"Successfully recorded Grade {grade} signal #{sig_id} for {sym_name} into tracker.")
+            except Exception as dbe:
+                logger.error(f"Database write failed for {sym_name}. Aborting alert dispatch to prevent unrecorded state: {dbe}")
+                continue
+
+            # 11. Dispatch Alert to Telegram (Only after database state is secured)
             msg_text = notifier.format_signal_message(signal_dict, confluence, news_status, visual_res)
             if live_allowed or os.environ.get("FORCE_DISPATCH"):
                 notifier.send_photo(chart_path, caption=f"Chart Analysis: {sym_name} ({entry_tf})")
                 notifier.send_message(msg_text)
-
-            # 11. Log to Tracker
-            tracker.log_new_signal(signal_dict, visual_res)
-            tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "APPROVED", total_score, None, f"RR: {sizing_res['planned_rr']}")
-            logger.info(f"Successfully recorded Grade {grade} signal for {sym_name} into tracker.")
 
         except Exception as e:
             logger.error(f"Error processing {sym_name}: {e}", exc_info=True)
