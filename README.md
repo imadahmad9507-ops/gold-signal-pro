@@ -31,6 +31,23 @@ Gold exhibits strong intraday stop hunts, mean-reverting chop, and spread-wideni
 
 ---
 
+## ⚠️ Data Source Transparency
+
+All signals are generated from **Yahoo Finance `GC=F`** (CME Globex Gold Futures, continuous contract).
+
+| Fact | Detail |
+| :--- | :--- |
+| **Data provider** | Yahoo Finance (free, public API) |
+| **Symbol used** | `GC=F` — CME Gold Futures (reference price) |
+| **What it is NOT** | Exness XAUUSD / XAUUSDc CFD execution price |
+| **Price difference** | Futures carry a small contango premium over spot CFD; values differ by \$1–\$5 at typical roll periods |
+| **Broker integration** | ❌ No Exness live-feed integration exists in this codebase |
+| **Effect on entries/stops** | Stated entry, SL, and TP levels are **reference prices** only.  Always verify against your broker's actual bid/ask before acting |
+
+Every Telegram alert is labelled `[Source: Yahoo GC=F (Reference Futures)]`.  Never treat these prices as confirmed Exness execution prices.
+
+---
+
 ## 🛠️ Architecture & Features
 
 1. **9-Module Confluence Engine**: Trend (EMAs, Supertrend, ADX), Momentum (RSI, MACD), Volatility regimes (ATR, BB Squeeze), Market Structure (BOS), Horizontal & Round Levels ($2000/$2050), Candlesticks, Intermarket DXY correlation, and Session filtering.
