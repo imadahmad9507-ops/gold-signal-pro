@@ -60,6 +60,11 @@ def run_cycle():
     tracker = SignalTracker()
     notifier = TelegramNotifier()
 
+    # Process any user commands sent via Telegram (/status, /signals, /learn, etc.)
+    from telegram_bot.commands import TelegramCommandHandler
+    cmd_handler = TelegramCommandHandler()
+    cmd_handler.process_updates()
+
     # Advanced Institutional & Session Modules
     from analysis.ict_concepts import ICTEngine
     from analysis.fibonacci import FibonacciToolkit
