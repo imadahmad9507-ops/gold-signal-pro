@@ -60,6 +60,19 @@ def run_cycle():
     tracker = SignalTracker()
     notifier = TelegramNotifier()
 
+    # Advanced Institutional & Session Modules
+    from analysis.ict_concepts import ICTEngine
+    from analysis.fibonacci import FibonacciToolkit
+    from sessions.watch_mode import SessionWatchManager
+    ict_engine = ICTEngine()
+    fib_toolkit = FibonacciToolkit()
+    session_mgr = SessionWatchManager(config)
+
+    # 0. Check Pre-Open Session Briefing (30-60m before Asia/London/NY open)
+    upcoming_sess = session_mgr.get_upcoming_session()
+    if upcoming_sess:
+        logger.info(f"Session approaching: {upcoming_sess['session']} open in {upcoming_sess['minutes_left']}m. Preparing game plan.")
+
     instruments = config.get("instruments", {})
     entry_tf = config.get("timeframes", {}).get("entry", "30m")
 
