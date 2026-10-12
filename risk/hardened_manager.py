@@ -1,16 +1,35 @@
 """
-Hardened Risk Management Engine:
-- Enforces strict monetary risk limit (0.25% of account balance, e.g. $0.125 on $50 equity).
-- Full contract specification model:
-  * Contract size (e.g. 100 oz for standard gold CFD, 100,000 for standard forex)
-  * Minimum volume step (e.g. 0.01 lot)
-  * Point/tick value calculations
-  * Spread, slippage, and commission cost deductions
-- STRICT REJECTION with 'RISK_LIMIT_UNACHIEVABLE_AT_MINIMUM_SIZE':
-  If the monetary risk at minimum volume (0.01 lot) exceeds the allowed risk ceiling,
-  the trade is STRICTLY REJECTED. Never silently rounds up risk!
-- Anti-compounding and circuit breakers (daily loss limits, max concurrent positions).
+Hardened Risk Management Engine
+================================
+Enforces a strict monetary risk limit (0.25% of account balance,
+e.g. $0.125 on a $50 USD-equivalent equity) per trade.
+
+Unit convention (CRITICAL — read before editing):
+--------------------------------------------------
+Gold (XAUUSD / XAUUSDc) prices are always quoted in USD per troy ounce
+on every account type, including Exness Cent accounts.  The Cent account
+distinction is purely a *display* convention: the account balance panel
+shows a number 100× larger (USC) but the underlying gold contract is
+still priced in USD.
+
+Therefore, for all gold instruments:
+  price_distance  [USD / oz]   — the raw move against you
+  contract_size   [oz / lot]   — ounces per 1.0 lot
+  loss_per_lot    [USD / lot]  = price_distance × contract_size
+                                 NO further FX conversion is required.
+
+For a standard account XAUUSD (100 oz/lot):
+  loss_per_lot = stop_dist_usd × 100   → large → rejected at 0.01 lot on $50
+
+For an Exness Cent Account XAUUSDc (1 oz/lot):
+  loss_per_lot = stop_dist_usd × 1.0
+  At 0.01 lot with a $6 stop: 0.01 × 1.0 × $6 = $0.06 USD → approved
+
+The `exchange_rate_to_usd` field in the spec is kept only for future
+non-gold instruments (e.g. a USD-settled silver contract priced in EUR).
+It is NOT applied to gold instruments where gold prices are natively USD.
 """
+import math
 import logging
 from typing import Dict, Any, Optional
 
@@ -25,53 +44,69 @@ class HardenedRiskManager:
 
     def get_contract_spec(self, symbol: str) -> Dict[str, Any]:
         """
-        Returns full contract specification for the instrument.
-        Matches authoritative Exness contract specifications:
-        - XAUUSD (Standard Account): Contract size = 100 oz, min lot = 0.01 lot, currency = USD.
-        - XAUUSDc (Cent Account): Contract size = 1 oz (or 100 oz priced in US Cents / USC),
-          where 1 cent lot = 1/100th of standard lot. Account currency is USC (100 USC = 1 USD).
+        Returns the full, verified contract specification for an instrument.
+
+        Sources:
+        - XAUUSD  : Exness Standard Account — 100 troy oz per standard lot.
+        - XAUUSDc : Exness Cent Account     — 1 troy oz per cent lot.
+                    Gold price is still quoted in USD/oz on both account types.
+                    The cent account merely displays the balance in USC (1 USD = 100 USC).
+
+        IMPORTANT: `exchange_rate_to_usd` for gold instruments is 1.0.
+        Gold prices ARE USD prices.  Multiplying by 0.01 for a cent account
+        would be a double-denomination error (treating a USD value as USC
+        and then dividing by 100 again).
         """
         inst = self.instruments_cfg.get(symbol, {})
         asset_type = inst.get("asset_type", "commodity")
 
-        # Exness Standard Gold CFD
-        if symbol == "XAUUSD" or symbol == "GC=F":
+        # ── Standard Exness Gold CFD (USD account) ──────────────────────────
+        if symbol in ("XAUUSD", "GC=F"):
             return {
                 "symbol": symbol,
-                "contract_size": 100.0,       # 1 standard lot = 100 troy oz
+                # 1 standard lot = 100 troy oz; gold price in USD/oz
+                "contract_size": 100.0,       # oz per lot
                 "min_lot": 0.01,
                 "lot_step": 0.01,
                 "max_lot": 20.0,
-                "tick_size": 0.01,            # $0.01 price step
+                "tick_size": 0.01,            # USD price step
                 "tick_value_per_lot": 1.0,    # $1.00 per $0.01 move on 1.0 lot
-                "typical_spread": inst.get("typical_spread_pips", 0.25), # in USD
+                "typical_spread": inst.get("typical_spread_pips", 0.25),  # USD
                 "commission_per_lot": inst.get("commission_per_lot", 0.0),
                 "estimated_slippage": inst.get("estimated_slippage", 0.10),
                 "account_currency": "USD",
                 "is_cent_account": False,
-                "exchange_rate_to_usd": 1.0
+                # Gold price already denominated in USD — no conversion needed.
+                "exchange_rate_to_usd": 1.0,
             }
-        # Exness Cent Account Gold CFD (Official symbol: XAUUSDc)
+
+        # ── Exness Cent Account Gold CFD (USC account display) ──────────────
         elif symbol == "XAUUSDc":
             return {
                 "symbol": symbol,
-                "contract_size": 1.0,         # 1 cent lot = 1 troy oz (1/100th of standard 100 oz)
+                # 1 cent lot = 1 troy oz (1/100th of the standard 100 oz lot).
+                # Gold price is STILL quoted in USD/oz — not USC.
+                "contract_size": 1.0,         # oz per cent lot
                 "min_lot": 0.01,
                 "lot_step": 0.01,
                 "max_lot": 200.0,
                 "tick_size": 0.01,
-                "tick_value_per_lot": 0.01,   # $0.01 per $0.01 move on 1.0 cent lot (in USD terms)
-                "typical_spread": inst.get("typical_spread_pips", 0.35), # slightly wider cent spread
+                "tick_value_per_lot": 0.01,   # $0.01 USD per $0.01 move on 1.0 cent lot
+                "typical_spread": inst.get("typical_spread_pips", 0.35),
                 "commission_per_lot": 0.0,
                 "estimated_slippage": 0.10,
-                "account_currency": "USC",    # US Cents (1 USD = 100 USC)
+                "account_currency": "USC",    # display currency; 1 USD = 100 USC
                 "is_cent_account": True,
-                "exchange_rate_to_usd": 0.01  # 1 USC = 0.01 USD
+                # Gold price is in USD whether account is standard or cent.
+                # Do NOT apply this to loss calculation — loss is already in USD.
+                "exchange_rate_to_usd": 1.0,
             }
+
+        # ── Forex instruments (standard 100k lot) ───────────────────────────
         elif asset_type == "forex":
             return {
                 "symbol": symbol,
-                "contract_size": 100000.0,
+                "contract_size": 100_000.0,
                 "min_lot": 0.01,
                 "lot_step": 0.01,
                 "max_lot": 20.0,
@@ -82,8 +117,10 @@ class HardenedRiskManager:
                 "estimated_slippage": 0.00005,
                 "account_currency": "USD",
                 "is_cent_account": False,
-                "exchange_rate_to_usd": 1.0
+                "exchange_rate_to_usd": 1.0,
             }
+
+        # ── Crypto ──────────────────────────────────────────────────────────
         elif asset_type == "crypto":
             return {
                 "symbol": symbol,
@@ -98,14 +135,17 @@ class HardenedRiskManager:
                 "estimated_slippage": 5.0,
                 "account_currency": "USD",
                 "is_cent_account": False,
-                "exchange_rate_to_usd": 1.0
+                "exchange_rate_to_usd": 1.0,
             }
 
-        # If instrument is unknown or missing required specifications, reject rather than guessing
+        # ── Unknown / unverified instrument — REJECT, never guess ───────────
         return {
             "symbol": symbol,
             "is_unsupported": True,
-            "reason": f"MISSING_CONTRACT_SPEC: Instrument '{symbol}' has no verified broker specifications."
+            "reason": (
+                f"MISSING_CONTRACT_SPEC: Instrument '{symbol}' has no verified "
+                "broker specifications.  Rejecting to prevent incorrect sizing."
+            ),
         }
 
     def evaluate_and_size_trade(
@@ -117,133 +157,189 @@ class HardenedRiskManager:
         proposed_tp2: float,
         proposed_tp1: Optional[float] = None,
         proposed_tp3: Optional[float] = None,
-        open_signals_count: int = 0
+        open_signals_count: int = 0,
     ) -> Dict[str, Any]:
         """
-        Evaluates risk parameters against account equity and returns either an APPROVED trade
-        or a structured REJECTION with exact rationale.
+        Evaluates risk parameters against account equity and returns either an
+        APPROVED trade result or a structured REJECTION with exact rationale.
+
+        All monetary values are computed and compared in USD.
+        For gold instruments, price distance in USD/oz × contract size in oz/lot
+        gives loss in USD/lot directly — no FX multiplication is applied.
         """
         balance = float(self.risk_cfg.get("account_balance_usd", 50.0))
         risk_pct = float(self.risk_cfg.get("risk_per_trade_percent", 0.25))
-        max_monetary_risk = round(balance * (risk_pct / 100.0), 4)
+        max_monetary_risk = round(balance * (risk_pct / 100.0), 6)  # USD
 
         min_rr = float(self.risk_cfg.get("min_risk_reward", 2.5))
         max_concurrent = int(self.risk_cfg.get("max_concurrent_signals", 1))
 
-        # 1. Concurrent position limit check
+        # ── Guard: concurrent position cap ──────────────────────────────────
         if open_signals_count >= max_concurrent:
             return {
                 "approved": False,
                 "rejection_code": "MAX_CONCURRENT_POSITIONS_REACHED",
-                "reason": f"Open signals ({open_signals_count}) meets or exceeds max limit ({max_concurrent})"
+                "reason": (
+                    f"Open signals ({open_signals_count}) meets or exceeds "
+                    f"the configured maximum ({max_concurrent})."
+                ),
             }
 
+        # ── Look up verified instrument specification ────────────────────────
         spec = self.get_contract_spec(symbol)
         if spec.get("is_unsupported"):
             return {
                 "approved": False,
                 "rejection_code": "MISSING_CONTRACT_SPEC",
-                "reason": spec.get("reason", f"Contract specifications for {symbol} are unverified.")
+                "reason": spec.get(
+                    "reason",
+                    f"Contract specifications for {symbol} are unverified.",
+                ),
             }
 
-        contract_size = spec["contract_size"]
-        min_lot = spec["min_lot"]
-        typical_spread = spec["typical_spread"]
-        slippage = spec["estimated_slippage"]
-        commission = spec["commission_per_lot"]
-        fx_to_usd = spec.get("exchange_rate_to_usd", 1.0)
-        is_cent = spec.get("is_cent_account", False)
+        contract_size = spec["contract_size"]   # oz/lot  (gold) or base units
+        min_lot       = spec["min_lot"]          # lots
+        lot_step      = spec.get("lot_step", 0.01)
+        typical_spread = spec["typical_spread"]  # USD (gold spread in price units)
+        slippage      = spec["estimated_slippage"]  # USD
+        commission    = spec["commission_per_lot"]   # USD per lot (0.0 for cent)
+        is_cent       = spec.get("is_cent_account", False)
+        # NOTE: exchange_rate_to_usd is 1.0 for gold; kept in spec for non-gold future use.
+        # It is intentionally NOT used in the gold loss calculation below.
 
-        # 2. Distance and direction sanity check
+        # ── Direction and distance validation ───────────────────────────────
         if bias == "LONG":
             if proposed_stop >= entry_price:
                 return {
                     "approved": False,
                     "rejection_code": "INVALID_STOP_PLACEMENT",
-                    "reason": f"Long stop loss ({proposed_stop}) must be strictly below entry price ({entry_price})"
+                    "reason": (
+                        f"LONG stop loss ({proposed_stop}) must be strictly "
+                        f"below entry ({entry_price})."
+                    ),
                 }
             if proposed_tp2 <= entry_price:
                 return {
                     "approved": False,
                     "rejection_code": "INVALID_TARGET_PLACEMENT",
-                    "reason": f"Long take profit ({proposed_tp2}) must be strictly above entry price ({entry_price})"
+                    "reason": (
+                        f"LONG take-profit ({proposed_tp2}) must be strictly "
+                        f"above entry ({entry_price})."
+                    ),
                 }
-            raw_risk_dist = entry_price - proposed_stop
-            reward_dist = proposed_tp2 - entry_price
+            raw_risk_dist  = entry_price - proposed_stop   # USD / oz
+            reward_dist    = proposed_tp2 - entry_price    # USD / oz
         elif bias == "SHORT":
             if proposed_stop <= entry_price:
                 return {
                     "approved": False,
                     "rejection_code": "INVALID_STOP_PLACEMENT",
-                    "reason": f"Short stop loss ({proposed_stop}) must be strictly above entry price ({entry_price})"
+                    "reason": (
+                        f"SHORT stop loss ({proposed_stop}) must be strictly "
+                        f"above entry ({entry_price})."
+                    ),
                 }
             if proposed_tp2 >= entry_price:
                 return {
                     "approved": False,
                     "rejection_code": "INVALID_TARGET_PLACEMENT",
-                    "reason": f"Short take profit ({proposed_tp2}) must be strictly below entry price ({entry_price})"
+                    "reason": (
+                        f"SHORT take-profit ({proposed_tp2}) must be strictly "
+                        f"below entry ({entry_price})."
+                    ),
                 }
-            raw_risk_dist = proposed_stop - entry_price
-            reward_dist = entry_price - proposed_tp2
+            raw_risk_dist  = proposed_stop - entry_price   # USD / oz
+            reward_dist    = entry_price - proposed_tp2    # USD / oz
         else:
             return {
                 "approved": False,
                 "rejection_code": "INVALID_BIAS",
-                "reason": f"Unknown trade bias: {bias}"
+                "reason": f"Unknown trade bias: '{bias}'.  Expected 'LONG' or 'SHORT'.",
             }
 
-        # 3. Spread and Slippage buffer added to total risk distance
+        # ── Widen risk distance by spread + slippage buffer ─────────────────
+        #   total_risk_dist  [USD / oz]
         total_risk_dist = raw_risk_dist + typical_spread + slippage
 
-        # 4. Reward-to-Risk check
+        # ── Reward-to-Risk check ─────────────────────────────────────────────
         effective_rr = round(reward_dist / (total_risk_dist + 1e-9), 2)
         if effective_rr < min_rr:
             return {
                 "approved": False,
                 "rejection_code": "INSUFFICIENT_REWARD_TO_RISK",
-                "reason": f"Effective R:R (1:{effective_rr}) is below required minimum (1:{min_rr})"
+                "reason": (
+                    f"Effective R:R (1:{effective_rr}) is below the required "
+                    f"minimum (1:{min_rr})."
+                ),
             }
 
-        # 5. Position Sizing & Monetary Limit Check in USD terms:
-        # Loss per lot in instrument currency:
-        loss_per_lot_native = (total_risk_dist * contract_size) + commission
-        # Converted to USD account currency:
-        loss_per_lot_usd = loss_per_lot_native * fx_to_usd
-        
-        # Ideal lot to risk exactly max_monetary_risk ($0.125):
+        # ── Monetary position-sizing (all values in USD) ─────────────────────
+        #
+        #   gold price distance is USD/oz  (price quoted in USD on ALL account types)
+        #   contract_size       is oz/lot
+        #   ─────────────────────────────────────────────────────────────────
+        #   loss_per_lot_usd    [USD/lot] = price_distance [USD/oz]
+        #                                  × contract_size [oz/lot]
+        #                                  + commission     [USD/lot]
+        #
+        #   For XAUUSDc (1 oz/lot):
+        #     loss_per_lot_usd = 6.35 USD/oz × 1.0 oz/lot + 0.0 = 6.35 USD/lot
+        #
+        #   The cent account shows the balance in USC but the gold EXPOSURE is
+        #   still USD.  Do NOT multiply by 0.01 — that would understate risk 100×.
+        #
+        loss_per_lot_usd = (total_risk_dist * contract_size) + commission   # USD / lot
+
+        # Ideal fractional lot to risk exactly max_monetary_risk:
         ideal_lot = max_monetary_risk / (loss_per_lot_usd + 1e-9)
 
-        # Expected loss at broker's absolute minimum volume (0.01 lot) in USD:
-        loss_at_min_volume = round(min_lot * loss_per_lot_usd, 4)
+        # Expected loss at broker minimum volume (0.01 lot):
+        loss_at_min_volume = round(min_lot * loss_per_lot_usd, 6)   # USD
 
-        # If even minimum trade size (0.01 lot) risks more than our allowed dollar budget ($0.125):
+        # Hard gate: even min lot must stay within the risk ceiling ──────────
         if loss_at_min_volume > max_monetary_risk:
             logger.info(
-                f"[{symbol}] Trade rejected: Minimum {min_lot} lot risks ${loss_at_min_volume:.2f}, "
-                f"which exceeds the configured ${max_monetary_risk:.3f} (0.25% of ${balance}) ceiling."
+                "[%s] REJECTED — min lot (%.2f) risks $%.4f USD, "
+                "ceiling is $%.4f USD (%.4f%% of $%.2f).",
+                symbol, min_lot, loss_at_min_volume,
+                max_monetary_risk, risk_pct, balance,
             )
             return {
                 "approved": False,
                 "rejection_code": "RISK_LIMIT_UNACHIEVABLE_AT_MINIMUM_SIZE",
                 "reason": (
-                    f"Minimum broker size ({min_lot} lot) incurs ${loss_at_min_volume:.3f} risk, "
-                    f"exceeding your strict ${max_monetary_risk:.3f} (0.25% of ${balance:.2f}) risk ceiling."
+                    f"Minimum broker size ({min_lot} lot) incurs "
+                    f"${loss_at_min_volume:.4f} USD risk, exceeding your strict "
+                    f"${max_monetary_risk:.4f} ({risk_pct}% of ${balance:.2f}) "
+                    "risk ceiling."
                 ),
-                "loss_at_min_volume": loss_at_min_volume,
-                "max_monetary_risk": max_monetary_risk,
+                "loss_at_min_volume_usd": loss_at_min_volume,
+                "max_monetary_risk_usd": max_monetary_risk,
                 "minimum_lot_size": min_lot,
-                "requires_cent_account": not is_cent
+                "requires_cent_account": not is_cent,
             }
 
-        # Round DOWN (floor) to nearest lot_step (0.01) so risk ceiling is NEVER exceeded:
-        import math
-        lot_step = spec.get("lot_step", 0.01)
+        # Floor to valid lot_step so the ceiling is NEVER exceeded ───────────
         safe_lot = max(min_lot, math.floor(ideal_lot / lot_step) * lot_step)
         safe_lot = round(safe_lot, 2)
 
-        # Derive TP ladder
-        tp1 = proposed_tp1 if proposed_tp1 else (entry_price + (1.0 * raw_risk_dist) if bias == "LONG" else entry_price - (1.0 * raw_risk_dist))
-        tp3 = proposed_tp3 if proposed_tp3 else (entry_price + (3.5 * raw_risk_dist) if bias == "LONG" else entry_price - (3.5 * raw_risk_dist))
+        # Derive final confirmed dollar loss at the approved lot ─────────────
+        final_dollar_loss = round(safe_lot * loss_per_lot_usd, 6)   # USD
+
+        # Assertion: approved trade must never exceed risk ceiling ────────────
+        assert final_dollar_loss <= max_monetary_risk + 1e-9, (
+            f"INTERNAL ERROR: Approved trade dollar loss ${final_dollar_loss:.6f} "
+            f"exceeds risk ceiling ${max_monetary_risk:.6f}.  "
+            "This is a bug in the lot-sizing logic."
+        )
+
+        # ── Derive full TP ladder ────────────────────────────────────────────
+        if bias == "LONG":
+            tp1 = proposed_tp1 if proposed_tp1 else round(entry_price + 1.0 * raw_risk_dist, 2)
+            tp3 = proposed_tp3 if proposed_tp3 else round(entry_price + 3.5 * raw_risk_dist, 2)
+        else:
+            tp1 = proposed_tp1 if proposed_tp1 else round(entry_price - 1.0 * raw_risk_dist, 2)
+            tp3 = proposed_tp3 if proposed_tp3 else round(entry_price - 3.5 * raw_risk_dist, 2)
 
         return {
             "approved": True,
@@ -255,11 +351,13 @@ class HardenedRiskManager:
             "tp1": round(tp1, 2),
             "tp2": round(proposed_tp2, 2),
             "tp3": round(tp3, 2),
-            "raw_risk_distance": round(raw_risk_dist, 2),
+            "raw_risk_distance_usd": round(raw_risk_dist, 4),
+            "total_risk_distance_usd": round(total_risk_dist, 4),
+            "loss_per_lot_usd": round(loss_per_lot_usd, 6),
             "effective_rr": effective_rr,
             "suggested_lot_size": safe_lot,
-            "expected_dollar_loss": round(safe_lot * loss_per_lot_usd, 4),
-            "max_allowed_dollar_risk": max_monetary_risk
+            "expected_dollar_loss": final_dollar_loss,
+            "max_allowed_dollar_risk": round(max_monetary_risk, 6),
         }
 
     def evaluate_signal_risk(
@@ -268,14 +366,18 @@ class HardenedRiskManager:
         entry: float,
         stop_loss: float,
         tp2: float,
-        is_cent_account: bool = False
+        is_cent_account: bool = False,
     ) -> Dict[str, Any]:
         """
         Convenience evaluator for pipeline integration.
-        Routes to XAUUSDc if is_cent_account is set.
+        Routes to XAUUSDc when is_cent_account=True and symbol is a gold instrument.
         """
         bias = "LONG" if tp2 > entry else "SHORT"
-        target_symbol = "XAUUSDc" if (is_cent_account and ("XAU" in symbol or "GC" in symbol)) else symbol
+        target_symbol = (
+            "XAUUSDc"
+            if (is_cent_account and ("XAU" in symbol or "GC" in symbol))
+            else symbol
+        )
 
         res = self.evaluate_and_size_trade(target_symbol, bias, entry, stop_loss, tp2)
         if res["approved"]:
@@ -286,7 +388,7 @@ class HardenedRiskManager:
                 "lot_size": res["suggested_lot_size"],
                 "dollar_risk": res["expected_dollar_loss"],
                 "requires_cent_account": False,
-                "is_cent_account": is_cent_account
+                "is_cent_account": is_cent_account,
             }
         else:
             code = res.get("rejection_code", "REJECTED")
@@ -296,7 +398,7 @@ class HardenedRiskManager:
                 "reason": f"{code}: {reason_text}",
                 "planned_rr": 0.0,
                 "lot_size": 0.0,
-                "dollar_risk": res.get("loss_at_min_volume", 0.0),
+                "dollar_risk": res.get("loss_at_min_volume_usd", 0.0),
                 "requires_cent_account": res.get("requires_cent_account", False),
-                "is_cent_account": is_cent_account
+                "is_cent_account": is_cent_account,
             }
