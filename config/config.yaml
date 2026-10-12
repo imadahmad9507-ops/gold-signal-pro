@@ -74,8 +74,8 @@ scoring:
   min_grade_a_plus: 85
   min_grade_a: 75
   min_grade_b: 68
-  send_grades: ["A+", "A", "B"]
-  only_send_a_plus: false # If true, suppresses everything below A+
+  send_grades: ["A+"] # STRICT CAPITAL PROTECTION: Only Grade A+ Prime Setups allowed to fire
+  only_send_a_plus: true # Suppresses all weaker B and standard A setups
   weights:
     trend: 30
     momentum: 15
@@ -87,17 +87,17 @@ scoring:
     regime: 5
 
 risk:
-  account_balance_usd: 1000.0
-  risk_per_trade_percent: 1.0
-  min_risk_reward: 2.0
+  account_balance_usd: 50.0  # Configured to your exact $50 balance
+  risk_per_trade_percent: 2.0  # Max $1.00 risk per trade
+  min_risk_reward: 2.5        # Demand minimum 1:2.5 R:R (strict high reward)
   tp1_r: 1.0
   tp2_r: 2.0
   tp3_r: 3.5
-  max_concurrent_signals: 3
-  cooldown_bars_per_symbol: 4
-  daily_max_loss_r: 3.0
-  consecutive_losses_pause: 3
-  pause_duration_hours: 12
+  max_concurrent_signals: 1   # Only 1 trade at a time to prevent overexposure
+  cooldown_bars_per_symbol: 6 # Mandatory wait period between setups
+  daily_max_loss_r: 2.0
+  consecutive_losses_pause: 2 # If 2 losses occur, pause immediately
+  pause_duration_hours: 24
   avoid_friday_after_utc: 19
   avoid_sunday_open: true
 
