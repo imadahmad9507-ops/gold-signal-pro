@@ -172,31 +172,77 @@ class HardenedRiskManager:
         gives loss in USD/lot directly — no FX multiplication is applied.
         """
         # ── Currency & Equity Configuration Validation ───────────────────────
-        account_curr = self.risk_cfg.get("account_currency", "USD").upper()
-        if account_curr not in ("USD", "USC"):
+        account_curr = self.risk_cfg.get("account_currency", "USD")
+        if not isinstance(account_curr, str) or account_curr.upper() not in ("USD", "USC"):
             return {
                 "approved": False,
                 "rejection_code": "AMBIGUOUS_CURRENCY_CONFIG",
-                "reason": f"Configured account currency '{account_curr}' is unsupported or ambiguous. Must be 'USD' or 'USC'."
+                "reason": f"Configured account currency '{account_curr}' is unsupported or ambiguous. Must be explicitly 'USD' or 'USC'."
             }
+        account_curr = account_curr.upper()
 
-        # Support both explicit account_balance_usd or account_balance_usc
-        if "account_balance_usd" in self.risk_cfg and "account_balance_usc" in self.risk_cfg:
-            b_usd = float(self.risk_cfg["account_balance_usd"])
-            b_usc = float(self.risk_cfg["account_balance_usc"])
-            # Economic equivalence check: 1 USD = 100 USC
-            if abs(b_usd * 100.0 - b_usc) > 1e-4:
+        has_usd = "account_balance_usd" in self.risk_cfg and self.risk_cfg["account_balance_usd"] is not None
+        has_usc = "account_balance_usc" in self.risk_cfg and self.risk_cfg["account_balance_usc"] is not None
+
+        # Helper to validate finite positive numeric balance
+        def _validate_num(val, name):
+            try:
+                num = float(val)
+                if not math.isfinite(num) or num <= 0.0:
+                    return None, f"Configured {name} ({val}) must be a positive finite number."
+                return num, None
+            except (ValueError, TypeError):
+                return None, f"Configured {name} ({val}) is not a valid number."
+
+        # If account_currency is USD, require explicit account_balance_usd
+        if account_curr == "USD":
+            if not has_usd:
                 return {
                     "approved": False,
                     "rejection_code": "AMBIGUOUS_CURRENCY_CONFIG",
-                    "reason": f"Conflicting balances configured: {b_usd} USD != {b_usc} USC (expected {b_usd * 100.0} USC)."
+                    "reason": "Missing required field 'account_balance_usd' for account_currency 'USD'. Never silently infer balance."
                 }
-            balance_usd = b_usd
+            val_usd, err = _validate_num(self.risk_cfg["account_balance_usd"], "account_balance_usd")
+            if err:
+                return {"approved": False, "rejection_code": "INVALID_BALANCE_VALUE", "reason": err}
+
+            # If account_balance_usc is also provided, validate economic equivalence (1 USD = 100 USC)
+            if has_usc:
+                val_usc, err_usc = _validate_num(self.risk_cfg["account_balance_usc"], "account_balance_usc")
+                if err_usc:
+                    return {"approved": False, "rejection_code": "INVALID_BALANCE_VALUE", "reason": err_usc}
+                if abs(val_usd * 100.0 - val_usc) > 1e-4:
+                    return {
+                        "approved": False,
+                        "rejection_code": "AMBIGUOUS_CURRENCY_CONFIG",
+                        "reason": f"Conflicting balances configured: {val_usd} USD != {val_usc} USC (expected {val_usd * 100.0} USC)."
+                    }
+            balance_usd = val_usd
+
+        # If account_currency is USC, require explicit account_balance_usc
         elif account_curr == "USC":
-            raw_usc = float(self.risk_cfg.get("account_balance_usc", self.risk_cfg.get("account_balance_usd", 5000.0)))
-            balance_usd = raw_usc / 100.0
-        else:
-            balance_usd = float(self.risk_cfg.get("account_balance_usd", 50.0))
+            if not has_usc:
+                return {
+                    "approved": False,
+                    "rejection_code": "AMBIGUOUS_CURRENCY_CONFIG",
+                    "reason": "Missing required field 'account_balance_usc' for account_currency 'USC'. Never silently infer from USD."
+                }
+            val_usc, err = _validate_num(self.risk_cfg["account_balance_usc"], "account_balance_usc")
+            if err:
+                return {"approved": False, "rejection_code": "INVALID_BALANCE_VALUE", "reason": err}
+
+            # If account_balance_usd is also provided, validate economic equivalence
+            if has_usd:
+                val_usd, err_usd = _validate_num(self.risk_cfg["account_balance_usd"], "account_balance_usd")
+                if err_usd:
+                    return {"approved": False, "rejection_code": "INVALID_BALANCE_VALUE", "reason": err_usd}
+                if abs(val_usd * 100.0 - val_usc) > 1e-4:
+                    return {
+                        "approved": False,
+                        "rejection_code": "AMBIGUOUS_CURRENCY_CONFIG",
+                        "reason": f"Conflicting balances configured: {val_usc} USC != {val_usd} USD (expected {val_usd * 100.0} USC)."
+                    }
+            balance_usd = val_usc / 100.0
 
         balance = balance_usd
         risk_pct = float(self.risk_cfg.get("risk_per_trade_percent", 0.25))
@@ -403,16 +449,32 @@ class HardenedRiskManager:
         entry: float,
         stop_loss: float,
         tp2: float,
-        is_cent_account: bool = False,
+        is_cent_account: Optional[bool] = None,
+        account_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Convenience evaluator for pipeline integration.
-        Routes to XAUUSDc when is_cent_account=True and symbol is a gold instrument.
+        Maps the analysis symbol (e.g. GC=F or XAUUSD) to the sizing target symbol based on
+        either account_type ("cent" vs "standard") or explicit is_cent_account flag.
+        Defaults to config['risk']['account_type'] or config['risk']['account_currency'] == 'USC'.
         """
         bias = "LONG" if tp2 > entry else "SHORT"
+
+        # Determine account type from parameter or config
+        cfg_acct_type = str(self.risk_cfg.get("account_type", "")).lower()
+        cfg_acct_curr = str(self.risk_cfg.get("account_currency", "USD")).upper()
+
+        if is_cent_account is not None:
+            use_cent = bool(is_cent_account)
+        elif account_type is not None:
+            use_cent = (account_type.lower() in ("cent", "usc", "cent_account"))
+        else:
+            use_cent = (cfg_acct_type in ("cent", "usc", "cent_account")) or (cfg_acct_curr == "USC")
+
+        # Map commodity gold to XAUUSDc if cent account sizing profile is active
         target_symbol = (
             "XAUUSDc"
-            if (is_cent_account and ("XAU" in symbol or "GC" in symbol))
+            if (use_cent and ("XAU" in symbol or "GC" in symbol))
             else symbol
         )
 
@@ -430,7 +492,7 @@ class HardenedRiskManager:
                 "spec_source": res.get("spec_source"),
                 "mt5_verified": res.get("mt5_verified"),
                 "requires_cent_account": False,
-                "is_cent_account": is_cent_account,
+                "is_cent_account": use_cent,
             }
         else:
             code = res.get("rejection_code", "REJECTED")
@@ -442,5 +504,5 @@ class HardenedRiskManager:
                 "lot_size": 0.0,
                 "dollar_risk": res.get("loss_at_min_volume_usd", 0.0),
                 "requires_cent_account": res.get("requires_cent_account", False),
-                "is_cent_account": is_cent_account,
+                "is_cent_account": use_cent,
             }

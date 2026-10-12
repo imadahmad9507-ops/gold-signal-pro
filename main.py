@@ -149,8 +149,21 @@ def run_cycle():
             tp2 = strategy_candidate["tp2"]
             tp3 = strategy_candidate.get("tp3", tp2)
 
+            # Check if live signals or research-only forward testing alerts are enabled
+            live_allowed = sym_info.get("live_enabled", False)
+            app_research_enabled = config.get("app", {}).get("research_alerts_enabled", False)
+            sym_research_enabled = sym_info.get("research_alerts_enabled", False)
+            research_allowed = app_research_enabled or sym_research_enabled
+
+            if not live_allowed and not research_allowed:
+                logger.info(f"{sym_name} signals and research alerts are locked/disabled by Quality Gate.")
+
             # 4. Hardened Risk & Position Sizing Gate ($50 / 0.25% ceiling check)
-            sizing_res = hardened_risk.evaluate_signal_risk(sym_name, entry, stop_loss, tp2)
+            # Route sizing based on instrument or risk account_type (cent vs standard)
+            instrument_acct_type = sym_info.get("account_type")
+            sizing_res = hardened_risk.evaluate_signal_risk(
+                sym_name, entry, stop_loss, tp2, account_type=instrument_acct_type
+            )
             if not sizing_res["approved"]:
                 rejection_msg = f"RISK REJECTED: {sizing_res['reason']}"
                 logger.warning(f"{sym_name} setup rejected by Hardened Risk Manager: {sizing_res['reason']}")
@@ -213,8 +226,10 @@ def run_cycle():
                 continue
 
             # 11. Dispatch Alert to Telegram (Only after database state is secured)
+            # Dispatches if live_allowed, or research_allowed, or explicit FORCE_DISPATCH environment variable
             msg_text = notifier.format_signal_message(signal_dict, confluence, news_status, visual_res)
-            if live_allowed or os.environ.get("FORCE_DISPATCH"):
+            dispatch_permitted = live_allowed or research_allowed or os.environ.get("FORCE_DISPATCH")
+            if dispatch_permitted:
                 notifier.send_photo(chart_path, caption=f"Chart Analysis: {sym_name} ({entry_tf})")
                 notifier.send_message(msg_text)
 

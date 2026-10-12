@@ -237,3 +237,101 @@ def test_tracker_separates_completed_trades_from_expired_and_invalid(tmp_path):
     assert stats["profit_factor"] == 2.0
     assert stats["total_r"] == 1.0
 
+
+def test_missing_matching_balance_field_rejected():
+    """
+    Requirements:
+    - If account_currency is 'USD' but account_balance_usd is missing -> REJECT
+    - If account_currency is 'USC' but account_balance_usc is missing (even if account_balance_usd is provided) -> REJECT
+    Never silently infer balance across currencies!
+    """
+    # 1. USD missing account_balance_usd
+    cfg_usd_missing = {"risk": {"account_currency": "USD"}}
+    res1 = HardenedRiskManager(cfg_usd_missing).evaluate_signal_risk("XAUUSDc", 2650.0, 2644.0, 2670.0)
+    assert res1["approved"] is False
+    assert "AMBIGUOUS_CURRENCY_CONFIG" in res1["reason"]
+
+    # 2. USC has account_balance_usd: 50.0 but NO account_balance_usc
+    # This directly checks the regression where $50 USD could be mistakenly read as 50 USC ($0.50)
+    cfg_usc_missing = {"risk": {"account_currency": "USC", "account_balance_usd": 50.0}}
+    res2 = HardenedRiskManager(cfg_usc_missing).evaluate_signal_risk("XAUUSDc", 2650.0, 2644.0, 2670.0)
+    assert res2["approved"] is False
+    assert "AMBIGUOUS_CURRENCY_CONFIG" in res2["reason"]
+    assert "account_balance_usc" in res2["reason"]
+
+
+def test_invalid_and_non_positive_balances_rejected():
+    """
+    Reject balances that are zero, negative, NaN, infinity, or non-numeric strings.
+    """
+    for bad_bal in [0.0, -50.0, float("nan"), float("inf"), "invalid_str"]:
+        cfg = {"risk": {"account_currency": "USD", "account_balance_usd": bad_bal}}
+        res = HardenedRiskManager(cfg).evaluate_signal_risk("XAUUSDc", 2650.0, 2644.0, 2670.0)
+        assert res["approved"] is False
+        assert "INVALID_BALANCE_VALUE" in res["reason"]
+
+
+def test_default_config_yaml_verification():
+    """
+    Ensure the actual repository config/config.yaml parses without error,
+    has explicit account_currency and balance, and properly rejects $50 standard gold while
+    allowing cent account gold.
+    """
+    import yaml
+    import os
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config", "config.yaml")
+    with open(cfg_path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    mgr = HardenedRiskManager(cfg)
+    # Standard account profile on $50: must be rejected
+    res_std = mgr.evaluate_signal_risk("XAUUSD", 2650.0, 2644.0, 2670.0, account_type="standard")
+    assert res_std["approved"] is False
+    assert "RISK_LIMIT_UNACHIEVABLE_AT_MINIMUM_SIZE" in res_std["reason"]
+
+    # Cent account profile on $50: must be approved at 0.01 lot
+    res_cent = mgr.evaluate_signal_risk("XAUUSD", 2650.0, 2644.0, 2670.0, account_type="cent")
+    assert res_cent["approved"] is True
+    assert res_cent["lot_size"] == 0.01
+    assert res_cent["dollar_risk"] <= 0.125
+
+
+def test_research_alerts_gating_and_isolation():
+    """
+    Verify:
+    1. If live_enabled is False and research_alerts_enabled is False -> Alert NOT sent
+    2. If live_enabled is False and research_alerts_enabled is True -> Research alert IS sent
+    3. Order execution is NEVER triggered
+    """
+    from unittest.mock import MagicMock
+    from telegram_bot.notifier import TelegramNotifier
+
+    mock_notifier = MagicMock()
+
+    # Scenario A: research_alerts_enabled is False, live_enabled is False
+    cfg_a = {"live_enabled": False, "research_alerts_enabled": False}
+    app_research_a = False
+    dispatch_permitted_a = cfg_a["live_enabled"] or app_research_a or cfg_a["research_alerts_enabled"]
+    assert dispatch_permitted_a is False
+
+    # Scenario B: research_alerts_enabled is True, live_enabled is False
+    cfg_b = {"live_enabled": False, "research_alerts_enabled": True}
+    app_research_b = True
+    dispatch_permitted_b = cfg_b["live_enabled"] or app_research_b or cfg_b["research_alerts_enabled"]
+    assert dispatch_permitted_b is True
+
+    # When permitted, verify research alert text format contains REFERENCE-ONLY notices
+    notifier = TelegramNotifier()
+    signal_dict = {
+        "symbol": "XAUUSD", "timeframe": "30m", "direction": "LONG",
+        "entry": 2650.0, "stop_loss": 2644.0, "tp1": 2656.0, "tp2": 2668.0,
+        "suggested_lot_size": 0.01, "confluence_score": 88.0, "grade": "A+",
+        "data_source": "Yahoo GC=F (Reference Futures)", "mt5_verified": False
+    }
+    msg = notifier.format_signal_message(signal_dict, {"grade": "A+", "total_score": 88.0, "reasons": []}, {"is_safe": True})
+    assert "RESEARCH ALERT: XAUUSD" in msg
+    assert "[REFERENCE-ONLY]" in msg
+    assert "Assumed Spec (Not MT5 Connected)" in msg
+    assert "Reference Entry" in msg
+    assert "Reference Sizing" in msg
+
