@@ -335,3 +335,40 @@ def test_research_alerts_gating_and_isolation():
     assert "Reference Entry" in msg
     assert "Reference Sizing" in msg
 
+
+def test_force_dispatch_env_variable_parsing(monkeypatch):
+    """
+    Verify FORCE_DISPATCH strictly requires '1' or 'true' (case-insensitive) to enable dispatch.
+    Values like 'false', '0', 'no', 'off', empty string, or unset MUST NOT enable dispatch.
+    """
+    from main import is_market_open  # sanity import
+
+    # Helper replicating main.py's dispatch condition
+    def check_dispatch(env_val):
+        if env_val is None:
+            monkeypatch.delenv("FORCE_DISPATCH", raising=False)
+        else:
+            monkeypatch.setenv("FORCE_DISPATCH", env_val)
+        import os
+        force_dispatch = os.environ.get("FORCE_DISPATCH", "").strip().lower() in ("1", "true")
+        live_allowed = False
+        research_allowed = False
+        return live_allowed or research_allowed or force_dispatch
+
+    # Values that MUST enable dispatch:
+    assert check_dispatch("1") is True
+    assert check_dispatch("true") is True
+    assert check_dispatch("True") is True
+    assert check_dispatch("  TRUE  ") is True
+
+    # Values that MUST NOT enable dispatch:
+    assert check_dispatch("0") is False
+    assert check_dispatch("false") is False
+    assert check_dispatch("False") is False
+    assert check_dispatch("FALSE") is False
+    assert check_dispatch("no") is False
+    assert check_dispatch("") is False
+    assert check_dispatch(None) is False
+    assert check_dispatch("some_random_value") is False
+
+

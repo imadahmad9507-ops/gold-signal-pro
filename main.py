@@ -226,9 +226,10 @@ def run_cycle():
                 continue
 
             # 11. Dispatch Alert to Telegram (Only after database state is secured)
-            # Dispatches if live_allowed, or research_allowed, or explicit FORCE_DISPATCH environment variable
+            # Dispatches if live_allowed, or research_allowed, or explicit FORCE_DISPATCH (strictly "1" or "true")
             msg_text = notifier.format_signal_message(signal_dict, confluence, news_status, visual_res)
-            dispatch_permitted = live_allowed or research_allowed or os.environ.get("FORCE_DISPATCH")
+            force_dispatch = os.environ.get("FORCE_DISPATCH", "").strip().lower() in ("1", "true")
+            dispatch_permitted = live_allowed or research_allowed or force_dispatch
             if dispatch_permitted:
                 notifier.send_photo(chart_path, caption=f"Chart Analysis: {sym_name} ({entry_tf})")
                 notifier.send_message(msg_text)
