@@ -36,7 +36,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python -c "from telegram_bot.notifier import TelegramNotifier; n = TelegramNotifier(); n.send_message('🟢 <b>Gold Signal Pro Engine Online</b>\nCloud scanner initialized successfully. A+ signals will be dispatched here automatically.')"
+          python -c "from telegram_bot.notifier import TelegramNotifier; from datetime import datetime, timezone; n = TelegramNotifier(); n.send_message(f'✅ <b>Confirmation Ping #2 Received!</b>\nTime: {datetime.now(timezone.utc).strftime(\"%H:%M:%S UTC\")}\nCloud runner is active and delivering directly to your phone without any laptop VPN.')"
 
       - name: Execute Signal & Analysis Cycle
         env:
