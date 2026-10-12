@@ -134,29 +134,45 @@ class SignalTracker:
 
     def get_performance_stats(self) -> Dict[str, Any]:
         with self._get_conn() as conn:
-            df = pd.read_sql("SELECT * FROM signals WHERE status != 'OPEN'", conn)
+            df = pd.read_sql("SELECT * FROM signals", conn)
 
         if df.empty:
             return {
-                "total_closed_signals": 0,
+                "total_signals": 0,
+                "open_signals": 0,
+                "completed_trades": 0,
+                "unresolved_or_invalidated": 0,
                 "win_rate": 0.0,
                 "profit_factor": 0.0,
                 "total_r": 0.0,
-                "summary": "No completed signals logged yet."
+                "summary": "No signals logged yet."
             }
 
-        total = len(df)
-        wins = len(df[df['outcome_r'] > 0])
-        win_rate = (wins / total) * 100 if total > 0 else 0.0
-        tot_win_r = df[df['outcome_r'] > 0]['outcome_r'].sum()
-        tot_loss_r = abs(df[df['outcome_r'] < 0]['outcome_r'].sum())
+        open_df = df[df['status'] == 'OPEN']
+        # Completed trades that reached a definitive target or stop:
+        completed_df = df[df['status'].isin(['TP1_HIT', 'TP2_HIT', 'TP3_HIT', 'SL_HIT'])]
+        # Unresolved, expired, or invalidated before execution:
+        invalid_df = df[df['status'].isin(['INVALIDATED', 'EXPIRED'])]
+
+        completed_count = len(completed_df)
+        wins = len(completed_df[completed_df['outcome_r'] > 0])
+        win_rate = (wins / completed_count) * 100 if completed_count > 0 else 0.0
+        tot_win_r = completed_df[completed_df['outcome_r'] > 0]['outcome_r'].sum()
+        tot_loss_r = abs(completed_df[completed_df['outcome_r'] < 0]['outcome_r'].sum())
         pf = round(tot_win_r / (tot_loss_r + 1e-9), 2)
-        total_r = round(df['outcome_r'].sum(), 2)
+        total_r = round(completed_df['outcome_r'].sum(), 2)
 
         return {
-            "total_closed_signals": total,
+            "total_signals": len(df),
+            "open_signals": len(open_df),
+            "completed_trades": completed_count,
+            "invalidated_or_expired": len(invalid_df),
             "win_rate": round(win_rate, 1),
             "profit_factor": pf,
             "total_r": total_r,
-            "summary": f"{total} trades | {win_rate:.1f}% Win Rate | PF: {pf} | Total Gain: {total_r}R"
+            "summary": (
+                f"{completed_count} completed trades ({wins}W / {completed_count - wins}L) | "
+                f"{win_rate:.1f}% Win Rate | PF: {pf} | Total Gain: {total_r}R | "
+                f"Active Open: {len(open_df)} | Invalidated/Expired: {len(invalid_df)}"
+            )
         }

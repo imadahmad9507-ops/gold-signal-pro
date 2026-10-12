@@ -186,10 +186,13 @@ def run_cycle():
                 "tp3": tp3,
                 "risk_reward_tp2": sizing_res["planned_rr"],
                 "suggested_lot_size": sizing_res["lot_size"],
-                "account_type": "Cent Account Mode" if sizing_res.get("requires_cent_account") else "Standard Account",
+                "account_type": "Cent Account Mode (1 oz/lot)" if sizing_res.get("is_cent_account") else "Standard Account (100 oz/lot)",
                 "confluence_score": total_score,
                 "grade": grade,
                 "data_source": "Yahoo GC=F (Reference Futures)",
+                "is_reference_research": True,
+                "spec_source": sizing_res.get("spec_source", "assumed_specification"),
+                "mt5_verified": sizing_res.get("mt5_verified", False),
                 "dedup_key": dedup_key
             }
 

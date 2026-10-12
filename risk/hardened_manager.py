@@ -78,6 +78,8 @@ class HardenedRiskManager:
                 "is_cent_account": False,
                 # Gold price already denominated in USD — no conversion needed.
                 "exchange_rate_to_usd": 1.0,
+                "spec_source": "assumed_specification",
+                "mt5_verified": False
             }
 
         # ── Exness Cent Account Gold CFD (USC account display) ──────────────
@@ -100,6 +102,8 @@ class HardenedRiskManager:
                 # Gold price is in USD whether account is standard or cent.
                 # Do NOT apply this to loss calculation — loss is already in USD.
                 "exchange_rate_to_usd": 1.0,
+                "spec_source": "assumed_specification",
+                "mt5_verified": False
             }
 
         # ── Forex instruments (standard 100k lot) ───────────────────────────
@@ -167,9 +171,37 @@ class HardenedRiskManager:
         For gold instruments, price distance in USD/oz × contract size in oz/lot
         gives loss in USD/lot directly — no FX multiplication is applied.
         """
-        balance = float(self.risk_cfg.get("account_balance_usd", 50.0))
+        # ── Currency & Equity Configuration Validation ───────────────────────
+        account_curr = self.risk_cfg.get("account_currency", "USD").upper()
+        if account_curr not in ("USD", "USC"):
+            return {
+                "approved": False,
+                "rejection_code": "AMBIGUOUS_CURRENCY_CONFIG",
+                "reason": f"Configured account currency '{account_curr}' is unsupported or ambiguous. Must be 'USD' or 'USC'."
+            }
+
+        # Support both explicit account_balance_usd or account_balance_usc
+        if "account_balance_usd" in self.risk_cfg and "account_balance_usc" in self.risk_cfg:
+            b_usd = float(self.risk_cfg["account_balance_usd"])
+            b_usc = float(self.risk_cfg["account_balance_usc"])
+            # Economic equivalence check: 1 USD = 100 USC
+            if abs(b_usd * 100.0 - b_usc) > 1e-4:
+                return {
+                    "approved": False,
+                    "rejection_code": "AMBIGUOUS_CURRENCY_CONFIG",
+                    "reason": f"Conflicting balances configured: {b_usd} USD != {b_usc} USC (expected {b_usd * 100.0} USC)."
+                }
+            balance_usd = b_usd
+        elif account_curr == "USC":
+            raw_usc = float(self.risk_cfg.get("account_balance_usc", self.risk_cfg.get("account_balance_usd", 5000.0)))
+            balance_usd = raw_usc / 100.0
+        else:
+            balance_usd = float(self.risk_cfg.get("account_balance_usd", 50.0))
+
+        balance = balance_usd
         risk_pct = float(self.risk_cfg.get("risk_per_trade_percent", 0.25))
         max_monetary_risk = round(balance * (risk_pct / 100.0), 6)  # USD
+        max_monetary_risk_usc = round(max_monetary_risk * 100.0, 4) # USC (e.g. 12.5 USC)
 
         min_rr = float(self.risk_cfg.get("min_risk_reward", 2.5))
         max_concurrent = int(self.risk_cfg.get("max_concurrent_signals", 1))
@@ -358,6 +390,11 @@ class HardenedRiskManager:
             "suggested_lot_size": safe_lot,
             "expected_dollar_loss": final_dollar_loss,
             "max_allowed_dollar_risk": round(max_monetary_risk, 6),
+            "expected_loss_usc": round(final_dollar_loss * 100.0, 4),
+            "max_allowed_risk_usc": max_monetary_risk_usc,
+            "account_currency": account_curr,
+            "spec_source": spec.get("spec_source", "assumed_specification"),
+            "mt5_verified": spec.get("mt5_verified", False)
         }
 
     def evaluate_signal_risk(
@@ -387,6 +424,11 @@ class HardenedRiskManager:
                 "planned_rr": res["effective_rr"],
                 "lot_size": res["suggested_lot_size"],
                 "dollar_risk": res["expected_dollar_loss"],
+                "risk_usc": res.get("expected_loss_usc"),
+                "max_allowed_dollar_risk": res.get("max_allowed_dollar_risk"),
+                "max_allowed_risk_usc": res.get("max_allowed_risk_usc"),
+                "spec_source": res.get("spec_source"),
+                "mt5_verified": res.get("mt5_verified"),
                 "requires_cent_account": False,
                 "is_cent_account": is_cent_account,
             }

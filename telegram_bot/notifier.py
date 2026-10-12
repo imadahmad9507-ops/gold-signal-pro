@@ -114,21 +114,24 @@ class TelegramNotifier:
         source_info = signal.get("data_source", "Yahoo GC=F (Reference Futures)")
         risk_mode = signal.get("account_type", "Standard 100oz (Demo Forward-Test)")
 
+        spec_status = "⚠️ Assumed Spec (Not MT5 Connected)" if not signal.get("mt5_verified") else "✅ MT5 Verified"
+
         msg = f"""
-{banner}⚡ <b>SIGNAL ALERT: {symbol}</b> ({tf})
+{banner}⚡ <b>RESEARCH ALERT: {symbol}</b> ({tf})
 {emoji} | <b>Grade: {grade} (Confluence: {score}/100 pts)</b>
 📊 <b>Quality Assessment:</b> {quality_tier}
 🎯 <b>Strategy:</b> <code>{strategy_name}</code>
-📡 <b>Data Feed:</b> <code>{source_info}</code>
+📡 <b>Data Feed:</b> <code>{source_info}</code> [REFERENCE-ONLY]
+⚙️ <b>Spec Status:</b> <code>{spec_status}</code>
 
 ━━━━━━━━━━━━━━━━━━━
-📍 <b>Entry:</b> <code>{entry}</code>
-🛑 <b>Stop Loss:</b> <code>{sl}</code>
-🎯 <b>TP1 (1.0R):</b> <code>{tp1}</code> (Move SL to BE)
-🎯 <b>TP2 (2.0R):</b> <code>{tp2}</code> (Core Target)
-🎯 <b>TP3 (3.5R):</b> <code>{tp3}</code> (Runner Target)
+📍 <b>Reference Entry:</b> <code>{entry}</code>
+🛑 <b>Reference Stop:</b> <code>{sl}</code>
+🎯 <b>Target TP1 (1.0R):</b> <code>{tp1}</code> (Move SL to BE)
+🎯 <b>Target TP2 (2.0R):</b> <code>{tp2}</code> (Core Target)
+🎯 <b>Target TP3 (3.5R):</b> <code>{tp3}</code> (Runner Target)
 ⚖️ <b>Planned R:R:</b> 1:{rr}
-📦 <b>Sizing Note:</b> <code>{lot}</code> lots ({risk_mode})
+📦 <b>Reference Sizing:</b> <code>{lot}</code> lots ({risk_mode})
 ━━━━━━━━━━━━━━━━━━━
 
 🧠 <b>Confluence Factors:</b>
@@ -138,7 +141,7 @@ class TelegramNotifier:
 {news_line}
 {visual_section}
 
-⚠️ <i>Invalidation: Price touching opposite structure before entry triggers.</i>
-📌 <i>Disclaimer: Educational signal only. No guaranteed profit. Manage risk strictly.</i>
+⚠️ <i>Notice: GC=F is a CME futures reference feed, NOT Exness live CFD execution prices. Sizing is reference-only; verify against broker terminal bid/ask.</i>
+📌 <i>Disclaimer: Pure research signal. No broker orders placed. Forward-test demo only.</i>
 """
         return msg.strip()
