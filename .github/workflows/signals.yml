@@ -5,6 +5,11 @@ on:
     # Runs every 15 minutes Monday through Friday (UTC)
     - cron: '*/15 * * * 1-5'
   workflow_dispatch: # Allows manual trigger from GitHub UI
+    inputs:
+      send_demo_alert:
+        description: 'Send a demo A+ alert preview to Telegram? (yes/no)'
+        required: false
+        default: 'no'
 
 permissions:
   contents: write
@@ -31,12 +36,13 @@ jobs:
         run: |
           python -m pytest tests/
 
-      - name: Verify Telegram Connection
+      - name: Send Demo A+ Alert Preview (Manual Trigger Only)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.send_demo_alert == 'yes'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python -c "from telegram_bot.notifier import TelegramNotifier; from datetime import datetime, timezone; n = TelegramNotifier(); n.send_message(f'✅ <b>Confirmation Ping #2 Received!</b>\nTime: {datetime.now(timezone.utc).strftime(\"%H:%M:%S UTC\")}\nCloud runner is active and delivering directly to your phone without any laptop VPN.')"
+          python send_demo_alert.py
 
       - name: Execute Signal & Analysis Cycle
         env:
