@@ -114,14 +114,22 @@ class TelegramCommandHandler:
                 lines = [f"• <b>{e.get('country')}</b>: {e.get('title')} ({e.get('date')})" for e in high_imp]
                 self.send_reply("📰 <b>Upcoming High-Impact Events:</b>\n" + "\n".join(lines))
 
-        elif cmd == "/learn":
-            learn_msg = """
-📚 <b>Beginner Trading Guide:</b>
-• <b>SMC (Smart Money Concepts):</b> Tracking where institutional orders are placed.
-• <b>OB (Order Block):</b> The last candle before an institutional move that broke structure.
-• <b>FVG (Fair Value Gap):</b> A price imbalance created by rapid displacement.
-• <b>OTE (Optimal Trade Entry):</b> The 62%–79% Fibonacci retracement sweet spot.
-• <b>BOS (Break of Structure):</b> Confirms trend direction by breaking previous swing highs/lows.
-• <b>R:R (Risk to Reward):</b> Ratio of potential profit compared to risk (minimum 1:2).
-"""
-            self.send_reply(learn_msg.strip())
+        elif cmd == "/risk":
+            try:
+                if len(parts) >= 3:
+                    new_bal = float(parts[1])
+                    new_risk_pct = float(parts[2])
+                    cfg_path = "config/config.yaml"
+                    cfg = yaml.safe_load(open(cfg_path))
+                    cfg["risk"]["account_balance_usd"] = new_bal
+                    cfg["risk"]["risk_per_trade_percent"] = new_risk_pct
+                    yaml.dump(cfg, open(cfg_path, "w"))
+                    max_risk_usd = round(new_bal * (new_risk_pct / 100.0), 2)
+                    self.send_reply(f"🛡️ <b>Risk Parameters Updated!</b>\n• Balance: <code>${new_bal:.2f}</code>\n• Risk Per Trade: <code>{new_risk_pct}%</code>\n• Max Dollar Risk: <code>${max_risk_usd}</code>\n• Lot Size Rule: <b>0.01 micro-lot minimum</b>")
+                else:
+                    self.send_reply("ℹ️ Usage: <code>/risk &lt;balance&gt; &lt;percent&gt;</code>\nExample for ultra-small risk: <code>/risk 50 0.5</code>")
+            except Exception as e:
+                self.send_reply(f"❌ Error updating risk: {e}")
+
+        elif cmd == "/instruments":
+            self.send_reply("🥇 <b>Active Instrument:</b> XAUUSD (Gold)\n• Quality Filter: <b>Grade A+ Only</b>\n• Min R:R: <b>1:2.5</b>\n• Exness typical spread: <b>0.25 USD</b>")
