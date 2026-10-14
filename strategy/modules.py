@@ -405,7 +405,10 @@ class KeyLevelReactionStrategy(BaseStrategy):
         return None
 
 
+from strategy.session_hunter import SessionHunterStrategy
+
 ALL_STRATEGIES = [
+    SessionHunterStrategy(),
     TrendPullbackStrategy(),
     BreakoutRetestStrategy(),
     RangeReversalStrategy(),

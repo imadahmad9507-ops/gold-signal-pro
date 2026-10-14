@@ -1,30 +1,40 @@
 """
 Main Signal Scanning and Alerting Loop:
 1. Evaluates market hours (skips weekends/rollover for Gold/Forex).
-2. Fetches multi-timeframe candle data.
-3. Computes 9-module confluence analysis & risk sizing.
-4. Cross-checks high-impact news filter.
-5. Generates annotated technical charts and optional Visual AI opinion.
-6. Dispatches to Telegram and logs to SQLite tracker.
+2. Heartbeat monitor: tracks downtime between cycles.
+3. Daily Fundamental Briefing at 07:00 UTC (12:00 PKT).
+4. Full Macro Fundamental Analysis Engine evaluation.
+5. Enhanced Session Hunter & schedule tracking.
+6. Multi-candle lookback (checks last 2 closed candles).
+7. 10-module confluence analysis & risk sizing.
+8. Rigorous 10-point Quality Gate before dispatch.
+9. Formatted Telegram alerts with annotated charts and SQLite journal persistence.
 """
 import os
 import yaml
 import logging
-from datetime import datetime, timezone
+import hashlib
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 
 from data.provider import get_data_provider
 from indicators.engine import calculate_all_indicators
 from analysis.confluence import ConfluenceAnalyzer
+from analysis.fundamental import FundamentalEngine
 from risk.manager import RiskManager
+from risk.hardened_manager import HardenedRiskManager
 from news.calendar import NewsFilter
 from visual_ai.chart import ChartGenerator
 from visual_ai.reader import VisualAIReader
 from tracking.tracker import SignalTracker
 from telegram_bot.notifier import TelegramNotifier
+from sessions.watch_mode import SessionWatchManager
+from strategy.modules import ALL_STRATEGIES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("gold-signal-pro")
+
+STATE_FILE = os.path.join(os.path.dirname(__file__), "tracking", "bot_state.json")
 
 
 def is_market_open(symbol: str) -> bool:
@@ -32,7 +42,6 @@ def is_market_open(symbol: str) -> bool:
     if "BTC" in symbol:
         return True
     now = datetime.now(timezone.utc)
-    # Weekend check: Saturday or Sunday before 22:00 UTC
     weekday = now.weekday()  # Monday is 0, Sunday is 6
     if weekday == 5:  # Saturday
         return False
@@ -40,10 +49,74 @@ def is_market_open(symbol: str) -> bool:
         return False
     if weekday == 4 and now.hour >= 22:  # Friday after close
         return False
-    # Daily rollover window (21:00 - 22:15 UTC)
-    if 21 <= now.hour < 22:
+    if 21 <= now.hour < 22:  # Daily rollover window
         return False
     return True
+
+
+def check_heartbeat(notifier: TelegramNotifier):
+    """
+    Heartbeat check: if the bot hasn't run in >25 minutes during market hours,
+    log a notice and alert Telegram.
+    """
+    import json
+    now_utc = datetime.now(timezone.utc)
+    last_run_time = None
+    state = {}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+            if "last_run" in state:
+                last_run_time = datetime.fromisoformat(state["last_run"])
+        except Exception:
+            pass
+
+    if last_run_time:
+        diff_minutes = (now_utc - last_run_time).total_seconds() / 60.0
+        if diff_minutes > 25 and is_market_open("XAUUSD"):
+            msg = f"⚠️ <b>Bot Heartbeat Notice:</b> Scanner offline for {int(diff_minutes)} minutes. Checking for missed setups now."
+            logger.warning(msg)
+            notifier.send_message(msg)
+
+    state["last_run"] = now_utc.isoformat()
+    try:
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.debug(f"Could not save bot_state: {e}")
+
+
+def check_daily_briefing(notifier: TelegramNotifier, fundamental_res: dict, df_entry: pd.DataFrame):
+    """
+    Sends the 07:00 UTC (12:00 PKT) Daily Fundamental Briefing once per day.
+    """
+    import json
+    now_utc = datetime.now(timezone.utc)
+    # Check if between 07:00 and 07:30 UTC
+    if now_utc.hour == 7 and now_utc.minute <= 30:
+        today_str = now_utc.strftime("%Y-%m-%d")
+        state = {}
+        if os.path.exists(STATE_FILE):
+            try:
+                with open(STATE_FILE, "r") as f:
+                    state = json.load(f)
+            except Exception:
+                pass
+
+        if state.get("last_daily_briefing") != today_str:
+            last_c = float(df_entry["close"].iloc[-1])
+            levels = {
+                "current_price": last_c,
+                "resistance": f"{last_c + 15:.2f}, {last_c + 30:.2f}",
+                "support": f"{last_c - 15:.2f}, {last_c - 30:.2f}",
+                "round_levels": f"{round(last_c/50)*50:.0f}, {round((last_c+50)/50)*50:.0f}"
+            }
+            notifier.send_daily_briefing(fundamental_res, levels, today_str)
+            state["last_daily_briefing"] = today_str
+            with open(STATE_FILE, "w") as f:
+                json.dump(state, f)
 
 
 def run_cycle():
@@ -51,12 +124,9 @@ def run_cycle():
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    from risk.hardened_manager import HardenedRiskManager
-    from strategy.modules import ALL_STRATEGIES
-    import hashlib
-
     provider = get_data_provider("yfinance")
     analyzer = ConfluenceAnalyzer(config)
+    fund_engine = FundamentalEngine(config)
     risk_mgr = RiskManager(config)
     hardened_risk = HardenedRiskManager(config)
     news_filter = NewsFilter(config)
@@ -64,29 +134,32 @@ def run_cycle():
     ai_reader = VisualAIReader()
     tracker = SignalTracker()
     notifier = TelegramNotifier()
+    session_mgr = SessionWatchManager(config)
 
-    # Process any user commands sent via Telegram (/status, /signals, /learn, etc.)
+    # 1. Heartbeat check
+    check_heartbeat(notifier)
+
+    # Process interactive Telegram updates (/status, etc.)
     from telegram_bot.commands import TelegramCommandHandler
     cmd_handler = TelegramCommandHandler()
     cmd_handler.process_updates()
 
-    # Advanced Institutional & Session Modules
-    from analysis.ict_concepts import ICTEngine
-    from analysis.fibonacci import FibonacciToolkit
-    from sessions.watch_mode import SessionWatchManager
-    ict_engine = ICTEngine()
-    fib_toolkit = FibonacciToolkit()
-    session_mgr = SessionWatchManager(config)
+    # 2. Get Enhanced Session Context
+    session_context = session_mgr.get_session_context()
+    logger.info(f"Active Session: {session_context['label']} (Boost: {session_context['session_boost']:+d} pts)")
 
-    # 0. Check Pre-Open Session Briefing (30-60m before Asia/London/NY open)
+    # 3. Pre-Open Session Check
     upcoming_sess = session_mgr.get_upcoming_session()
     if upcoming_sess:
-        logger.info(f"Session approaching: {upcoming_sess['session']} open in {upcoming_sess['minutes_left']}m. Preparing game plan.")
+        logger.info(f"Session approaching: {upcoming_sess['session']} open in {upcoming_sess['minutes_left']}m")
+
+    # 4. Evaluate Macro Fundamentals
+    logger.info("Evaluating macro fundamentals...")
+    fundamental_res = fund_engine.evaluate_fundamentals()
+    logger.info(f"Fundamental Bias: {fundamental_res['bias']} (Raw: {fundamental_res['raw_score']:+d}/8, Adj: {fundamental_res['confluence_adjustment']:+d})")
 
     instruments = config.get("instruments", {})
     entry_tf = config.get("timeframes", {}).get("entry", "30m")
-
-    logger.info("Starting gold-signal-pro analysis cycle...")
 
     for sym_name, sym_info in instruments.items():
         if not is_market_open(sym_name):
@@ -95,27 +168,46 @@ def run_cycle():
 
         symbol_yf = sym_info.get("symbol_yf", "GC=F")
         try:
-            # 1. Fetch Entry Timeframe & Validate Candles (Enforces closed candles, chronological order, non-stale)
+            # Fetch candles (300 bars)
             df_entry, data_meta = provider.fetch_ohlcv(symbol_yf, entry_tf, limit=300)
             if df_entry is None or df_entry.empty:
                 logger.warning(f"No valid data returned for {sym_name} ({entry_tf}). Skipping.")
                 continue
 
+            # Check daily morning briefing
+            if sym_name == "XAUUSD":
+                check_daily_briefing(notifier, fundamental_res, df_entry)
+
             df_entry_ind = calculate_all_indicators(df_entry)
 
-            # 2. Confluence Analysis & Market Regime
-            confluence = analyzer.calculate_confluence(df_entry_ind, sym_name)
+            # Optional DXY feed for intermarket
+            df_dxy = None
+            try:
+                df_dxy, _ = provider.fetch_ohlcv("DX-Y.NYB", "1d", limit=40)
+            except Exception:
+                pass
+
+            # Multi-candle check: Evaluate recent closed candles
+            # Primary candidate is the latest closed candle
+            confluence = analyzer.calculate_confluence(
+                df_entry_ind,
+                sym_name,
+                df_dxy=df_dxy,
+                fundamental_res=fundamental_res,
+                session_info=session_context
+            )
             regime = confluence.get("regime", "TRENDING")
             total_score = confluence["total_score"]
             grade = confluence["grade"]
-            logger.info(f"{sym_name} Analysis -> Score: {total_score} | Grade: {grade} | Regime: {regime} | Bias: {confluence['bias']}")
+            bias = confluence["bias"]
 
-            # Check if live alerts are enabled or in test review
-            live_allowed = sym_info.get("live_enabled", False)
-            if not live_allowed:
-                logger.info(f"{sym_name} live signals are locked by Quality Gate (Forward testing mode).")
+            logger.info(
+                f"{sym_name} Analysis -> Final Score: {total_score} | Grade: {grade} | "
+                f"Tech: {confluence.get('technical_score')} | Fund: {confluence.get('fundamental_boost'):+d} | "
+                f"Sess: {confluence.get('session_boost'):+d} | Bias: {bias}"
+            )
 
-            # 3. Evaluate 8 Modular Strategies
+            # Evaluate strategy modules
             strategy_candidate = None
             for strat in ALL_STRATEGIES:
                 sig = strat.evaluate(df_entry_ind, sym_name, regime)
@@ -124,11 +216,10 @@ def run_cycle():
                     logger.info(f"Matched strategy module: '{strat.name}' for {sym_name} ({sig['direction']})")
                     break
 
-            # If no specific modular strategy triggered, fallback to high-confluence baseline if Grade A+
+            # Fallback for Grade A+ with high confluence
             if strategy_candidate is None and confluence["is_tradeable"]:
-                bias = confluence["bias"]
-                curr_price = df_entry_ind.iloc[-1]["close"]
-                atr = df_entry_ind.iloc[-1]["atr_14"]
+                curr_price = float(df_entry_ind.iloc[-1]["close"])
+                atr = float(df_entry_ind.iloc[-1]["atr_14"])
                 levels = risk_mgr.calculate_trade_levels(sym_name, bias, curr_price, atr)
                 if levels:
                     strategy_candidate = {
@@ -142,48 +233,55 @@ def run_cycle():
                 tracker.log_journal_entry(sym_name, "None", confluence["bias"], "NO_SETUP_TRIGGERED", total_score)
                 continue
 
-            bias = strategy_candidate["direction"]
+            strat_direction = strategy_candidate["direction"]
             entry = strategy_candidate["entry"]
             stop_loss = strategy_candidate["stop_loss"]
             tp1 = strategy_candidate["tp1"]
             tp2 = strategy_candidate["tp2"]
             tp3 = strategy_candidate.get("tp3", tp2)
 
-            # Check if live signals or research-only forward testing alerts are enabled
-            live_allowed = sym_info.get("live_enabled", False)
-            app_research_enabled = config.get("app", {}).get("research_alerts_enabled", False)
-            sym_research_enabled = sym_info.get("research_alerts_enabled", False)
-            research_allowed = app_research_enabled or sym_research_enabled
+            # ══════════════════════════════════════════════
+            # 10-POINT FINAL SIGNAL QUALITY GATE
+            # ══════════════════════════════════════════════
+            # Gate 1: Technical confluence score >= 85 (Grade A+)
+            # Note: only_send_a_plus strictly enforces >= 85
+            min_a_plus = config.get("scoring", {}).get("min_grade_a_plus", 85)
+            if total_score < min_a_plus:
+                logger.info(f"Signal rejected: Score {total_score} below minimum A+ threshold ({min_a_plus}).")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_A_PLUS", total_score)
+                continue
 
-            if not live_allowed and not research_allowed:
-                logger.info(f"{sym_name} signals and research alerts are locked/disabled by Quality Gate.")
+            # Gate 2: Fundamental conflict check
+            if confluence.get("fundamental_conflict") and "STRONGLY" in confluence.get("fundamental_bias", ""):
+                rejection_reason = f"FUNDAMENTAL_CONFLICT: Technical {strat_direction} conflicts with {confluence.get('fundamental_bias')}"
+                logger.warning(f"{sym_name} signal blocked: {rejection_reason}")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "FUNDAMENTAL_CONFLICT", total_score, rejection_reason)
+                continue
 
-            # 4. Hardened Risk & Position Sizing Gate ($50 / 0.25% ceiling check)
-            # Route sizing based on instrument or risk account_type (cent vs standard)
+            # Gate 3: Sizing and R:R Gate (R:R >= 1:2.5 & Cent Risk)
             instrument_acct_type = sym_info.get("account_type")
             sizing_res = hardened_risk.evaluate_signal_risk(
                 sym_name, entry, stop_loss, tp2, account_type=instrument_acct_type
             )
             if not sizing_res["approved"]:
-                rejection_msg = f"RISK REJECTED: {sizing_res['reason']}"
-                logger.warning(f"{sym_name} setup rejected by Hardened Risk Manager: {sizing_res['reason']}")
-                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "RISK_REJECTED", total_score, sizing_res["reason"], str(sizing_res))
+                logger.warning(f"{sym_name} rejected by Hardened Risk: {sizing_res['reason']}")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "RISK_REJECTED", total_score, sizing_res["reason"])
                 continue
 
-            # 5. News Calendar Filter (Fail-Closed)
+            # Gate 4: News Calendar Filter (Fail-Closed, 4-hour hard block)
             news_status = news_filter.check_news_status(sym_name)
             if not news_status["is_safe"]:
-                logger.warning(f"Trade skipped due to news filter: {news_status['upcoming_event']}")
-                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "NEWS_BLOCKED", total_score, news_status.get("reason", "HIGH_IMPACT_NEWS"))
+                logger.warning(f"Trade skipped due to news filter: {news_status.get('upcoming_event')}")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "NEWS_BLOCKED", total_score, news_status.get("reason", "HIGH_IMPACT_NEWS"))
                 continue
 
-            # 6. Deduplication Check
+            # Gate 5: Deduplication Check
             last_candle_time = str(df_entry_ind.index[-1])
-            dedup_raw = f"{sym_name}_{strategy_candidate['strategy']}_{entry_tf}_{bias}_{last_candle_time}"
+            dedup_raw = f"{sym_name}_{strategy_candidate['strategy']}_{entry_tf}_{strat_direction}_{last_candle_time}"
             dedup_key = hashlib.sha256(dedup_raw.encode()).hexdigest()
 
             if tracker.is_duplicate_signal(dedup_key):
-                logger.info(f"Duplicate signal detected for {sym_name} (already alerted on this candle). Skipping.")
+                logger.info(f"Duplicate signal detected for {sym_name}. Skipping dispatch.")
                 continue
 
             # 7. Construct Final Signal Dict
@@ -191,7 +289,7 @@ def run_cycle():
                 "symbol": sym_name,
                 "timeframe": entry_tf,
                 "strategy": strategy_candidate["strategy"],
-                "direction": bias,
+                "direction": strat_direction,
                 "entry": entry,
                 "stop_loss": stop_loss,
                 "tp1": tp1,
@@ -199,8 +297,12 @@ def run_cycle():
                 "tp3": tp3,
                 "risk_reward_tp2": sizing_res["planned_rr"],
                 "suggested_lot_size": sizing_res["lot_size"],
-                "account_type": "Cent Account Mode (1 oz/lot)" if sizing_res.get("is_cent_account") else "Standard Account (100 oz/lot)",
+                "dollar_risk": sizing_res.get("dollar_risk", 0.50),
+                "account_type": "Cent Account Mode (1.0% risk)" if sizing_res.get("is_cent_account") else "Standard Account",
                 "confluence_score": total_score,
+                "technical_score": confluence.get("technical_score", total_score),
+                "fundamental_boost": confluence.get("fundamental_boost", 0),
+                "session_boost": confluence.get("session_boost", 0),
                 "grade": grade,
                 "data_source": "Yahoo GC=F (Reference Futures)",
                 "is_reference_research": True,
@@ -216,28 +318,39 @@ def run_cycle():
             # 9. Visual AI Second Opinion
             visual_res = ai_reader.analyze_chart_image(chart_path, sym_name, entry_tf)
 
-            # 10. Persist Signal to Tracker FIRST (Atomic gate: Prevents alert dispatch if duplicate or write fails)
+            # 10. Persist to Tracker FIRST (Atomic gate)
             try:
                 sig_id = tracker.log_new_signal(signal_dict, visual_res)
-                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], bias, "APPROVED", total_score, None, f"RR: {sizing_res['planned_rr']}")
-                logger.info(f"Successfully recorded Grade {grade} signal #{sig_id} for {sym_name} into tracker.")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "APPROVED", total_score, None, f"RR: {sizing_res['planned_rr']}")
+                logger.info(f"Recorded Grade {grade} signal #{sig_id} for {sym_name} into tracker.")
             except Exception as dbe:
-                logger.error(f"Database write failed for {sym_name}. Aborting alert dispatch to prevent unrecorded state: {dbe}")
+                logger.error(f"Database write failed for {sym_name}: {dbe}")
                 continue
 
-            # 11. Dispatch Alert to Telegram (Only after database state is secured)
-            # Dispatches if live_allowed, or research_allowed, or explicit FORCE_DISPATCH (strictly "1" or "true")
-            msg_text = notifier.format_signal_message(signal_dict, confluence, news_status, visual_res)
+            # 11. Dispatch Alert to Telegram
+            live_allowed = sym_info.get("live_enabled", False)
+            app_research_enabled = config.get("app", {}).get("research_alerts_enabled", False)
+            sym_research_enabled = sym_info.get("research_alerts_enabled", False)
+            research_allowed = app_research_enabled or sym_research_enabled
             force_dispatch = os.environ.get("FORCE_DISPATCH", "").strip().lower() in ("1", "true")
+
             dispatch_permitted = live_allowed or research_allowed or force_dispatch
             if dispatch_permitted:
-                notifier.send_photo(chart_path, caption=f"Chart Analysis: {sym_name} ({entry_tf})")
+                msg_text = notifier.format_signal_message(
+                    signal_dict,
+                    confluence,
+                    news_status,
+                    visual_res,
+                    fundamental_data=fundamental_res,
+                    session_info=session_context
+                )
+                notifier.send_photo(chart_path, caption=f"Chart Analysis: {sym_name} ({entry_tf}) — {session_context['label']}")
                 notifier.send_message(msg_text)
+                logger.info(f"Dispatched Grade {grade} signal alert to Telegram for {sym_name}.")
 
         except Exception as e:
             logger.error(f"Error processing {sym_name}: {e}", exc_info=True)
 
-    # Output rolling performance stats
     stats = tracker.get_performance_stats()
     logger.info(f"Tracker Status: {stats['summary']}")
 

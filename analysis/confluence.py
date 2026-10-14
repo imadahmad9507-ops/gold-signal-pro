@@ -274,9 +274,11 @@ class ConfluenceAnalyzer:
         symbol: str,
         df_htf_1h: Optional[pd.DataFrame] = None,
         df_htf_4h: Optional[pd.DataFrame] = None,
-        df_dxy: Optional[pd.DataFrame] = None
+        df_dxy: Optional[pd.DataFrame] = None,
+        fundamental_res: Optional[Dict[str, Any]] = None,
+        session_info: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Aggregates all 9 modules into a 0-100 score, grade, and structured reasoning."""
+        """Aggregates technical, fundamental, and session evaluators into a final score (0-100) and grade."""
         last_time = df_entry.index[-1]
         
         # 1. Trend
@@ -301,7 +303,7 @@ class ConfluenceAnalyzer:
         # 9. Session
         sess_score, sess_desc, sess_valid = self.analyze_session(last_time)
 
-        # Weighted calculation
+        # Weighted technical calculation
         score_breakdown = {
             "trend": t_score * self.weights["trend"],
             "momentum": m_score * self.weights["momentum"],
@@ -312,13 +314,47 @@ class ConfluenceAnalyzer:
             "intermarket": im_score * self.weights["intermarket"],
             "regime": reg_score * self.weights["regime"]
         }
-        total_score = sum(score_breakdown.values())
+        technical_score = sum(score_breakdown.values())
 
-        # If regime is chaotic or outside tradeable sessions, penalize
         if not sess_valid:
-            total_score *= 0.5
+            technical_score *= 0.5
         if reg_type == "CHAOTIC":
-            total_score *= 0.4
+            technical_score *= 0.4
+
+        technical_score = round(min(max(technical_score, 0), 100), 1)
+        total_score = technical_score
+
+        # 10. Fundamental Integration
+        fund_boost = 0
+        fund_conflict = False
+        fund_bias = "NEUTRAL"
+        fund_reason = None
+        if fundamental_res is not None:
+            fund_bias = fundamental_res.get("bias", "NEUTRAL")
+            adj = fundamental_res.get("confluence_adjustment", 0)
+
+            # Check directional agreement
+            is_bullish_fund = "BULLISH" in fund_bias
+            is_bearish_fund = "BEARISH" in fund_bias
+
+            if (bias == "LONG" and is_bullish_fund) or (bias == "SHORT" and is_bearish_fund):
+                fund_boost = adj + 5  # Bonus +5 for agreement
+                fund_reason = f"Fundamentals AGREE with technical {bias} ({fund_bias}, +{fund_boost} pts)"
+            elif (bias == "LONG" and is_bearish_fund) or (bias == "SHORT" and is_bullish_fund):
+                fund_boost = -abs(adj) - 10
+                fund_conflict = True
+                fund_reason = f"CRITICAL WARNING: Fundamentals CONFLICT with technical {bias} ({fund_bias}, {fund_boost} pts)"
+            else:
+                fund_boost = 0
+                fund_reason = f"Fundamentals neutral or mixed ({fund_bias})"
+
+            total_score += fund_boost
+
+        # 11. Session Boost Integration
+        session_boost = 0
+        if session_info is not None:
+            session_boost = session_info.get("session_boost", 0)
+            total_score += session_boost
 
         total_score = round(min(max(total_score, 0), 100), 1)
 
@@ -327,7 +363,10 @@ class ConfluenceAnalyzer:
         min_a = self.config.get("scoring", {}).get("min_grade_a", 75)
         min_b = self.config.get("scoring", {}).get("min_grade_b", 68)
 
-        if total_score >= min_a_plus:
+        # Critical Rule: If fundamental bias STRONGLY conflicts, block A+ grade
+        if fund_conflict and "STRONGLY" in fund_bias:
+            grade = "C"
+        elif total_score >= min_a_plus:
             grade = "A+"
         elif total_score >= min_a:
             grade = "A"
@@ -343,10 +382,17 @@ class ConfluenceAnalyzer:
             f"• Intermarket: {im_reason}",
             f"• Session & Regime: {sess_desc} ({reg_type})"
         ]
+        if fund_reason:
+            reasons.append(f"• Macro Fundamentals: {fund_reason}")
 
         return {
             "bias": bias,
             "total_score": total_score,
+            "technical_score": technical_score,
+            "fundamental_boost": fund_boost,
+            "session_boost": session_boost,
+            "fundamental_conflict": fund_conflict,
+            "fundamental_bias": fund_bias,
             "grade": grade,
             "breakdown": score_breakdown,
             "regime": reg_type,
@@ -354,3 +400,4 @@ class ConfluenceAnalyzer:
             "reasons": reasons,
             "is_tradeable": grade in self.config.get("scoring", {}).get("send_grades", ["A", "B"])
         }
+
