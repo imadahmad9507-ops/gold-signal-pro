@@ -108,12 +108,21 @@ class TelegramNotifier:
         valid_duration = timedelta(hours=1 if in_kz else 2)
         valid_until = (now_utc + valid_duration).strftime("%H:%M UTC")
 
-        # Win probability heuristic mapping
+        # Score breakdown components
         tech_score = confluence.get("technical_score", score)
         fund_boost = confluence.get("fundamental_boost", 0)
         sess_boost = confluence.get("session_boost", 0)
 
-        if score >= 92:
+        # Win probability calculation (Empirical ML model or Heuristic)
+        ml_eval = signal.get("ml_prediction") or confluence.get("ml_prediction")
+        if ml_eval and ml_eval.get("win_probability_pct"):
+            prob_pct = ml_eval["win_probability_pct"]
+            edge = ml_eval.get("model_edge", 0.0)
+            drivers_str = "; ".join(ml_eval.get("key_drivers", [])[:2])
+            win_prob = f"<b>{prob_pct:.1f}%</b> (Statistical Edge: {edge:+0.1f}%)"
+            if drivers_str:
+                win_prob += f"\n   • <i>AI Model Factor: {drivers_str}</i>"
+        elif score >= 92:
             win_prob = "~70-75%"
         elif score >= 88:
             win_prob = "~65-70%"
@@ -178,6 +187,31 @@ class TelegramNotifier:
         spec_status = "⚠️ Assumed Spec (Not MT5 Connected)" if not signal.get("mt5_verified") else "✅ MT5 Verified"
         source_info = signal.get("data_source", "Yahoo GC=F (Reference Futures)")
 
+        # Volume profile and Exness calibrated pricing
+        vol_prof = signal.get("volume_profile") or confluence.get("volume_profile")
+        vol_prof_str = ""
+        if vol_prof and vol_prof.get("poc"):
+            vol_prof_str = f"""
+📦 <b>SESSION VOLUME PROFILE:</b>
+• Point of Control (POC): <code>${vol_prof.get('poc', 0):.2f}</code>
+• Value Area: <code>${vol_prof.get('val', 0):.2f} – ${vol_prof.get('vah', 0):.2f}</code>
+• Auction Flow: <b>{vol_prof.get('profile_bias', 'NEUTRAL')}</b>
+"""
+
+        calibrated_str = ""
+        calibrated_entry = signal.get("calibrated_entry")
+        if calibrated_entry:
+            c_sl = signal.get("calibrated_sl", sl)
+            c_tp1 = signal.get("calibrated_tp1", tp1)
+            c_tp2 = signal.get("calibrated_tp2", tp2)
+            calibrated_str = f"""
+📐 <b>EXNESS SPOT CALIBRATED ESTIMATE:</b>
+• Entry: <code>{calibrated_entry:.2f}</code>
+• Stop Loss: <code>{c_sl:.2f}</code>
+• TP1 / TP2: <code>{c_tp1:.2f} / {c_tp2:.2f}</code>
+<i>(Calibrated from Futures basis: {signal.get('price_offset', 0.0):+.2f} USD)</i>
+"""
+
         msg = f"""
 🔔 <b>GOLD SIGNAL — A+ PRIME SETUP ⭐</b>
 ⚡ <b>RESEARCH ALERT: {symbol}</b> ({tf})
@@ -194,7 +228,7 @@ class TelegramNotifier:
 📊 <b>Planned R:R:</b> 1:{rr}
 📦 <b>Reference Sizing:</b> <code>{lot}</code> lots ({risk_mode} | {dollar_risk_str})
 ⏳ <b>Signal valid until:</b> {valid_until}
-
+{calibrated_str}
 ─────────────────────────────────────
 📊 <b>SCORE BREAKDOWN</b>
 • Technical: {tech_score:.0f}/100
@@ -203,7 +237,7 @@ class TelegramNotifier:
 <b>Final Confluence Score:</b> <b>{score:.0f}/100 ✅ {grade}</b>
 🎯 <b>Win Probability Estimate:</b> {win_prob}
 ⚠️ <i>Heuristic score based on confluence weightings — not a guaranteed win rate.</i>
-
+{vol_prof_str}
 ─────────────────────────────────────
 🔍 <b>WHY THIS TRADE (Technical Factors):</b>
 {tech_reasons}

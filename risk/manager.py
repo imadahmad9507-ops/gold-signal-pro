@@ -22,10 +22,21 @@ class RiskManager:
         current_price: float,
         atr: float,
         recent_swing_low: Optional[float] = None,
-        recent_swing_high: Optional[float] = None
+        recent_swing_high: Optional[float] = None,
+        regime: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         inst_cfg = self.instruments_cfg.get(symbol, {})
-        atr_mult = inst_cfg.get("atr_multiplier", 1.5)
+        base_atr_mult = inst_cfg.get("atr_multiplier", 1.5)
+        # Dynamic volatility expansion: widen stops/targets slightly in high volatility or trending regimes
+        if regime in ["VOLATILE", "CHAOTIC"]:
+            atr_mult = base_atr_mult * 1.3
+        elif regime == "TRENDING":
+            atr_mult = base_atr_mult * 1.15
+        elif regime == "CONSOLIDATING":
+            atr_mult = base_atr_mult * 0.95
+        else:
+            atr_mult = base_atr_mult
+
         min_rr = self.risk_cfg.get("min_risk_reward", 2.0)
         spread = inst_cfg.get("typical_spread_pips", 0.25)
         min_stop_dist = inst_cfg.get("min_stop_distance_pips", 1.5)

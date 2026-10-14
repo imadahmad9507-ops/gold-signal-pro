@@ -23,6 +23,8 @@ from indicators.engine import calculate_all_indicators
 from analysis.confluence import ConfluenceAnalyzer
 from analysis.fundamental import FundamentalEngine
 from analysis.news_predictor import NewsPredictorEngine
+from analysis.volume_profile import VolumeProfileEngine
+from analysis.ml_predictor import MLConfluencePredictor
 from patterns.detector import PatternDetector
 from risk.manager import RiskManager
 from risk.hardened_manager import HardenedRiskManager
@@ -461,7 +463,7 @@ def run_cycle():
             if strategy_candidate is None and confluence["is_tradeable"]:
                 curr_price = float(df_entry_ind.iloc[-1]["close"])
                 atr = float(df_entry_ind.iloc[-1]["atr_14"])
-                levels = risk_mgr.calculate_trade_levels(sym_name, bias, curr_price, atr)
+                levels = risk_mgr.calculate_trade_levels(sym_name, bias, curr_price, atr, regime=regime)
                 if levels:
                     strategy_candidate = {
                         "strategy": "Confluence Core Alignment",
@@ -592,6 +594,33 @@ def run_cycle():
                             json.dump(state_obj, sf)
                     except Exception:
                         pass
+
+                # TIER 4: Developing Chart Pattern Alert
+                if sym_name == "XAUUSD" and news_status["is_safe"]:
+                    try:
+                        detector = PatternDetector(swing_window=5)
+                        patterns_found = detector.detect_patterns(df_entry_ind)
+                        if patterns_found:
+                            top_p = patterns_found[0]
+                            pat_key = f"tier4_pattern_{top_p['name']}_{now_utc.strftime('%Y-%m-%d_%H')}"
+                            if not state_obj.get(pat_key) and top_p.get("quality_score", 0) >= 80:
+                                last_c = float(df_entry_ind["close"].iloc[-1])
+                                notifier.send_pattern_alert(
+                                    symbol=sym_name,
+                                    timeframe=entry_tf,
+                                    pattern_name=top_p["name"],
+                                    direction="BULLISH" if "BULLISH" in top_p.get("type", "") else "BEARISH",
+                                    quality_score=top_p.get("quality_score", 80),
+                                    key_level=top_p.get("level", last_c),
+                                    completion_target=top_p.get("neckline", last_c)
+                                )
+                                state_obj[pat_key] = True
+                                state_obj["last_notification_sent"] = now_utc.isoformat()
+                                with open(STATE_FILE, "w") as sf:
+                                    json.dump(state_obj, sf)
+                    except Exception as pe:
+                        logger.debug(f"Tier 4 pattern detection skipped: {pe}")
+
                 continue
 
             # Gate 1: Technical confluence score >= 85 (Grade A+)
@@ -631,6 +660,29 @@ def run_cycle():
                 logger.info(f"Duplicate signal detected for {sym_name}. Skipping dispatch.")
                 continue
 
+            # Calculate Volume Profile (POC, VAH, VAL)
+            vp_engine = VolumeProfileEngine()
+            vol_profile = vp_engine.calculate_profile(df_entry_ind, bars_lookback=48)
+
+            # Calculate ML Confluence Prediction
+            ml_engine = MLConfluencePredictor(config)
+            ml_pred = ml_engine.predict_setup_probability(
+                df_entry_ind,
+                bias=strat_direction,
+                regime=regime,
+                confluence_score=total_score,
+                volume_profile=vol_profile,
+                fundamental_bias=fundamental_res.get("bias", "NEUTRAL"),
+                session_info=session_context
+            )
+
+            # Price offset calibration for Exness Spot display
+            price_offset = float(sym_info.get("price_offset_calibration", 0.0))
+            calibrated_entry = round(entry + price_offset, 2) if price_offset != 0.0 else None
+            calibrated_sl = round(stop_loss + price_offset, 2) if price_offset != 0.0 else None
+            calibrated_tp1 = round(tp1 + price_offset, 2) if price_offset != 0.0 else None
+            calibrated_tp2 = round(tp2 + price_offset, 2) if price_offset != 0.0 else None
+
             # 7. Construct Final Signal Dict
             signal_dict = {
                 "symbol": sym_name,
@@ -642,6 +694,11 @@ def run_cycle():
                 "tp1": tp1,
                 "tp2": tp2,
                 "tp3": tp3,
+                "calibrated_entry": calibrated_entry,
+                "calibrated_sl": calibrated_sl,
+                "calibrated_tp1": calibrated_tp1,
+                "calibrated_tp2": calibrated_tp2,
+                "price_offset": price_offset,
                 "risk_reward_tp2": sizing_res["planned_rr"],
                 "suggested_lot_size": sizing_res["lot_size"],
                 "dollar_risk": sizing_res.get("dollar_risk", 0.50),
@@ -651,6 +708,8 @@ def run_cycle():
                 "fundamental_boost": confluence.get("fundamental_boost", 0),
                 "session_boost": confluence.get("session_boost", 0),
                 "grade": grade,
+                "volume_profile": vol_profile,
+                "ml_prediction": ml_pred,
                 "data_source": "Yahoo GC=F (Reference Futures)",
                 "is_reference_research": True,
                 "spec_source": sizing_res.get("spec_source", "assumed_specification"),
