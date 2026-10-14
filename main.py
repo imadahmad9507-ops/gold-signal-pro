@@ -24,7 +24,7 @@ from analysis.confluence import ConfluenceAnalyzer
 from analysis.fundamental import FundamentalEngine
 from analysis.news_predictor import NewsPredictorEngine
 from analysis.volume_profile import VolumeProfileEngine
-from analysis.ml_predictor import MLConfluencePredictor
+from analysis.ml_predictor import ConfluenceFactorEngine
 from patterns.detector import PatternDetector
 from risk.manager import RiskManager
 from risk.hardened_manager import HardenedRiskManager
@@ -660,13 +660,13 @@ def run_cycle():
                 logger.info(f"Duplicate signal detected for {sym_name}. Skipping dispatch.")
                 continue
 
-            # Calculate Volume Profile (POC, VAH, VAL)
+            # Calculate Volume Profile (POC, VAH, VAL) - Estimated Bar-Based
             vp_engine = VolumeProfileEngine()
             vol_profile = vp_engine.calculate_profile(df_entry_ind, bars_lookback=48)
 
-            # Calculate ML Confluence Prediction
-            ml_engine = MLConfluencePredictor(config)
-            ml_pred = ml_engine.predict_setup_probability(
+            # Calculate Algorithmic Confluence Factor Alignment
+            factor_engine = ConfluenceFactorEngine(config)
+            factor_analysis = factor_engine.evaluate_factor_alignment(
                 df_entry_ind,
                 bias=strat_direction,
                 regime=regime,
@@ -701,16 +701,16 @@ def run_cycle():
                 "price_offset": price_offset,
                 "risk_reward_tp2": sizing_res["planned_rr"],
                 "suggested_lot_size": sizing_res["lot_size"],
-                "dollar_risk": sizing_res.get("dollar_risk", 0.50),
-                "account_type": "Cent Account Mode (1.0% risk)" if sizing_res.get("is_cent_account") else "Standard Account",
+                "dollar_risk": sizing_res.get("dollar_risk", 0.125),
+                "account_type": "Cent Account Mode (0.25% risk)" if sizing_res.get("is_cent_account") else "Standard Account",
                 "confluence_score": total_score,
                 "technical_score": confluence.get("technical_score", total_score),
                 "fundamental_boost": confluence.get("fundamental_boost", 0),
                 "session_boost": confluence.get("session_boost", 0),
                 "grade": grade,
                 "volume_profile": vol_profile,
-                "ml_prediction": ml_pred,
-                "data_source": "Yahoo GC=F (Reference Futures)",
+                "factor_analysis": factor_analysis,
+                "data_source": "Yahoo GC=F Futures (Manual Shift Estimate)" if price_offset != 0.0 else "Yahoo GC=F (Reference Futures)",
                 "is_reference_research": True,
                 "spec_source": sizing_res.get("spec_source", "assumed_specification"),
                 "mt5_verified": sizing_res.get("mt5_verified", False),

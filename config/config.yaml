@@ -93,11 +93,11 @@ risk:
   account_currency: "USC"      # Explicit currency: "USD" or "USC"
   account_balance_usc: 5000.0  # Explicit 5,000 USC balance (= $50.00 USD equity)
   account_type: "cent"         # Sizing profile: "standard" (100 oz) or "cent" (1 oz - XAUUSDc)
-  risk_per_trade_percent: 1.0  # 1.0% risk per trade (50.0 USC / $0.50 max loss on $50 account)
+  risk_per_trade_percent: 0.25 # 0.25% risk per trade (12.5 USC / $0.125 max loss on $50 account)
   min_risk_reward: 2.5        # Demand minimum 1:2.5 R:R (strict high reward)
   tp1_r: 1.0
-  tp2_r: 2.0
-  tp3_r: 3.5
+  tp2_r: 2.5
+  tp3_r: 4.0
   max_concurrent_signals: 1   # Only 1 trade at a time to prevent overexposure
   cooldown_bars_per_symbol: 6 # Mandatory wait period between setups
   daily_max_loss_r: 2.0

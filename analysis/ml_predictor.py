@@ -1,13 +1,13 @@
 """
-Predictive Confluence & Win-Probability Model:
-Computes empirical win-probability and statistical confluence edge based on:
+Confluence Factor Analysis Engine:
+Evaluates multi-factor institutional alignment based on:
 1. Multi-factor indicator alignments (Trend, Momentum, Volatility, Regime)
-2. Volume Profile Location (Above/Below POC, outside Value Area)
+2. Estimated Volume Profile Location (Above/Below POC, outside Value Area)
 3. Macro Fundamental Alignment
 4. Session Alignment (Killzone boost)
 
-Provides a calibrated statistical probability (0-100%) rather than arbitrary static guessing,
-similar to institutional scoring models.
+NOTE: This is an analytical factor breakdown and alignment scoring heuristic,
+NOT a trained or backtested machine learning win probability.
 """
 from typing import Dict, Any, Optional
 import math
@@ -15,11 +15,11 @@ import numpy as np
 import pandas as pd
 
 
-class MLConfluencePredictor:
+class ConfluenceFactorEngine:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
 
-    def predict_setup_probability(
+    def evaluate_factor_alignment(
         self,
         df_ind: pd.DataFrame,
         bias: str,
@@ -30,21 +30,19 @@ class MLConfluencePredictor:
         session_info: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Calculates an empirical Bayesian/Logistic confluence probability for the proposed trade.
+        Calculates an algorithmic alignment score (-100 to +100) and factor breakdown.
         Returns:
             {
-                "win_probability_pct": float (e.g. 68.5),
+                "alignment_score": float,
                 "confidence_grade": str ("HIGH", "MEDIUM", "LOW"),
-                "model_edge": float,
                 "key_drivers": list of str
             }
         """
         if df_ind is None or len(df_ind) < 14:
             return {
-                "win_probability_pct": 50.0,
+                "alignment_score": 0.0,
                 "confidence_grade": "LOW",
-                "model_edge": 0.0,
-                "key_drivers": ["Insufficient data for predictive modeling"]
+                "key_drivers": ["Insufficient data for factor analysis"]
             }
 
         last = df_ind.iloc[-1]
@@ -155,24 +153,19 @@ class MLConfluencePredictor:
                 logit += 0.25
                 drivers.append("Active prime session killzone liquidity present")
 
-        # Convert logit to probability via Sigmoid function: P = 1 / (1 + exp(-logit))
-        prob = 1.0 / (1.0 + math.exp(-logit))
-        
-        # Scale to realistic trading probability bound [35% .. 82%]
-        # Real world institutional win rates rarely exceed 75-80% with 1:2.5 R:R
-        bounded_prob = float(np.clip(prob * 100.0, 35.0, 82.0))
+        # Convert logit to an alignment score index (-100 to +100 scale)
+        alignment_score = float(np.clip(logit * 35.0, -100.0, 100.0))
 
-        confidence_grade = "MEDIUM"
-        if bounded_prob >= 70.0:
-            confidence_grade = "HIGH"
-        elif bounded_prob < 55.0:
-            confidence_grade = "LOW"
-
-        edge = round(bounded_prob - 50.0, 1)
+        confidence_grade = "NEUTRAL"
+        if alignment_score >= 35.0:
+            confidence_grade = "STRONG_CONFLUENCE"
+        elif alignment_score >= 10.0:
+            confidence_grade = "MODERATE_CONFLUENCE"
+        elif alignment_score <= -25.0:
+            confidence_grade = "CONFLICTING_FACTORS"
 
         return {
-            "win_probability_pct": round(bounded_prob, 1),
+            "alignment_score": round(alignment_score, 1),
             "confidence_grade": confidence_grade,
-            "model_edge": edge,
             "key_drivers": drivers[:4]  # Top 4 drivers
         }

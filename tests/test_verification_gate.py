@@ -289,11 +289,11 @@ def test_default_config_yaml_verification():
     assert res_std["approved"] is False
     assert "RISK_LIMIT_UNACHIEVABLE_AT_MINIMUM_SIZE" in res_std["reason"]
 
-    # Cent account profile on $50 with 1% risk: must be approved
+    # Cent account profile on $50 with 0.25% risk ($0.125 max loss): must be approved at min 0.01 lot
     res_cent = mgr.evaluate_signal_risk("XAUUSD", 2650.0, 2644.0, 2670.0, account_type="cent")
     assert res_cent["approved"] is True
-    assert res_cent["lot_size"] == 0.07  # Scaled for 1.0% risk ($0.50 max loss)
-    assert res_cent["dollar_risk"] <= 0.50
+    assert res_cent["lot_size"] == 0.01  # Safe minimum lot for $0.125 ceiling
+    assert res_cent["dollar_risk"] <= 0.125
 
 
 def test_research_alerts_gating_and_isolation():

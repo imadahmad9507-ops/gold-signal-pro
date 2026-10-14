@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from analysis.volume_profile import VolumeProfileEngine
-from analysis.ml_predictor import MLConfluencePredictor
+from analysis.ml_predictor import ConfluenceFactorEngine
 from risk.manager import RiskManager
 
 
@@ -39,12 +39,12 @@ def test_volume_profile_poc_calculation():
     ]
 
 
-def test_ml_confluence_predictor():
-    predictor = MLConfluencePredictor()
+def test_confluence_factor_engine():
+    engine = ConfluenceFactorEngine()
     df = _mock_df(50, base_price=2000.0)
     vp = VolumeProfileEngine().calculate_profile(df, bars_lookback=30)
 
-    pred = predictor.predict_setup_probability(
+    analysis = engine.evaluate_factor_alignment(
         df_ind=df,
         bias="LONG",
         regime="TRENDING",
@@ -54,15 +54,22 @@ def test_ml_confluence_predictor():
         session_info={"is_peak": True, "session_boost": 5}
     )
 
-    assert "win_probability_pct" in pred
-    assert 35.0 <= pred["win_probability_pct"] <= 82.0
-    assert pred["confidence_grade"] in ["HIGH", "MEDIUM", "LOW"]
-    assert len(pred["key_drivers"]) > 0
+    assert "alignment_score" in analysis
+    assert -100.0 <= analysis["alignment_score"] <= 100.0
+    assert analysis["confidence_grade"] in ["STRONG_CONFLUENCE", "MODERATE_CONFLUENCE", "NEUTRAL", "CONFLICTING_FACTORS"]
+    assert len(analysis["key_drivers"]) > 0
 
 
-def test_dynamic_atr_risk_manager():
+def test_dynamic_atr_risk_manager_and_rr():
     config = {
-        "risk": {"min_risk_reward": 2.0, "account_balance_usd": 1000.0, "risk_per_trade_percent": 1.0},
+        "risk": {
+            "min_risk_reward": 2.5,
+            "account_balance_usd": 1000.0,
+            "risk_per_trade_percent": 0.25,
+            "tp1_r": 1.0,
+            "tp2_r": 2.5,
+            "tp3_r": 4.0
+        },
         "instruments": {
             "XAUUSD": {
                 "atr_multiplier": 1.5,
@@ -80,5 +87,35 @@ def test_dynamic_atr_risk_manager():
 
     assert levels_normal is not None
     assert levels_volatile is not None
-    # Volatile ATR multiplier (1.5 * 1.3 = 1.95) should have wider risk distance than normal (1.5)
+    # Volatile ATR multiplier should have wider risk distance than normal
     assert levels_volatile["risk_distance"] > levels_normal["risk_distance"]
+    # Fallback path must pass its own 2.5 R:R requirement!
+    assert levels_normal["risk_reward_tp2"] >= 2.5
+
+
+def test_default_config_strict_risk_ceiling():
+    import yaml
+    import os
+    from risk.hardened_manager import HardenedRiskManager
+
+    cfg_path = os.path.join(os.path.dirname(__file__), "..", "config", "config.yaml")
+    with open(cfg_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    # 1. Verify configured risk percent is strictly 0.25%
+    risk_pct = config["risk"]["risk_per_trade_percent"]
+    assert risk_pct == 0.25, f"Expected 0.25% risk per trade, found {risk_pct}%"
+
+    # 2. Verify account balance equity
+    balance_usc = config["risk"]["account_balance_usc"]
+    assert balance_usc == 5000.0  # 5,000 USC = $50.00 USD
+
+    # 3. Verify maximum monetary risk calculation
+    max_risk_usd = (balance_usc / 100.0) * (risk_pct / 100.0)
+    assert abs(max_risk_usd - 0.125) < 1e-4, f"Expected max risk $0.125, calculated ${max_risk_usd}"
+
+    # 4. Verify HardenedRiskManager enforces this ceiling on Cent trade evaluation
+    hrm = HardenedRiskManager(config)
+    eval_res = hrm.evaluate_signal_risk("XAUUSD", 2000.0, 1995.0, 2015.0, account_type="cent")
+    assert eval_res["approved"] is True
+    assert eval_res["dollar_risk"] <= 0.125, f"Evaluated dollar risk {eval_res['dollar_risk']} exceeds $0.125 ceiling"

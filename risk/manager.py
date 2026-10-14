@@ -54,10 +54,14 @@ class RiskManager:
                 risk_distance = min_stop_dist
                 stop_loss = entry - risk_distance
 
+            tp1_r = self.risk_cfg.get("tp1_r", 1.0)
+            tp2_r = self.risk_cfg.get("tp2_r", max(2.5, min_rr))
+            tp3_r = self.risk_cfg.get("tp3_r", 4.0)
+
             # Take Profit ladder
-            tp1 = entry + (1.0 * risk_distance)
-            tp2 = entry + (2.0 * risk_distance)
-            tp3 = entry + (3.5 * risk_distance)
+            tp1 = entry + (tp1_r * risk_distance)
+            tp2 = entry + (tp2_r * risk_distance)
+            tp3 = entry + (tp3_r * risk_distance)
             rr_ratio = (tp2 - entry) / (risk_distance + 1e-9)
 
         elif bias == "SHORT":
@@ -70,9 +74,13 @@ class RiskManager:
                 risk_distance = min_stop_dist
                 stop_loss = entry + risk_distance
 
-            tp1 = entry - (1.0 * risk_distance)
-            tp2 = entry - (2.0 * risk_distance)
-            tp3 = entry - (3.5 * risk_distance)
+            tp1_r = self.risk_cfg.get("tp1_r", 1.0)
+            tp2_r = self.risk_cfg.get("tp2_r", max(2.5, min_rr))
+            tp3_r = self.risk_cfg.get("tp3_r", 4.0)
+
+            tp1 = entry - (tp1_r * risk_distance)
+            tp2 = entry - (tp2_r * risk_distance)
+            tp3 = entry - (tp3_r * risk_distance)
             rr_ratio = (entry - tp2) / (risk_distance + 1e-9)
         else:
             return None

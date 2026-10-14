@@ -113,23 +113,17 @@ class TelegramNotifier:
         fund_boost = confluence.get("fundamental_boost", 0)
         sess_boost = confluence.get("session_boost", 0)
 
-        # Win probability calculation (Empirical ML model or Heuristic)
-        ml_eval = signal.get("ml_prediction") or confluence.get("ml_prediction")
-        if ml_eval and ml_eval.get("win_probability_pct"):
-            prob_pct = ml_eval["win_probability_pct"]
-            edge = ml_eval.get("model_edge", 0.0)
-            drivers_str = "; ".join(ml_eval.get("key_drivers", [])[:2])
-            win_prob = f"<b>{prob_pct:.1f}%</b> (Statistical Edge: {edge:+0.1f}%)"
+        # Algorithmic Factor Alignment (replaces untrained win probability claims)
+        factor_eval = signal.get("factor_analysis") or confluence.get("factor_analysis")
+        if factor_eval and "alignment_score" in factor_eval:
+            align_score = factor_eval["alignment_score"]
+            align_grade = factor_eval.get("confidence_grade", "NEUTRAL").replace("_", " ")
+            drivers_str = "; ".join(factor_eval.get("key_drivers", [])[:2])
+            factor_display = f"<b>{align_score:+0.1f} / 100</b> ({align_grade})"
             if drivers_str:
-                win_prob += f"\n   • <i>AI Model Factor: {drivers_str}</i>"
-        elif score >= 92:
-            win_prob = "~70-75%"
-        elif score >= 88:
-            win_prob = "~65-70%"
-        elif score >= 85:
-            win_prob = "~60-65%"
+                factor_display += f"\n   • <i>Supporting Factors: {drivers_str}</i>"
         else:
-            win_prob = "~55-60%"
+            factor_display = "Evaluated via 9-factor confluence matrix"
 
         # Technical reasoning
         reasons_list = confluence.get("reasons", [])
@@ -171,8 +165,8 @@ class TelegramNotifier:
             next_news_text = f"ℹ️ {news_status.get('upcoming_event')}"
 
         # Risk mode string
-        risk_mode = signal.get("account_type", "Cent Account Mode (1.0% risk)")
-        dollar_risk_str = f"~{signal.get('dollar_risk', 0.50):.2f} USD" if "dollar_risk" in signal else "~50 USC risk"
+        risk_mode = signal.get("account_type", "Cent Account Mode (0.25% risk)")
+        dollar_risk_str = f"~{signal.get('dollar_risk', 0.125):.3f} USD" if "dollar_risk" in signal else "~12.5 USC risk"
 
         # AI Visual section
         visual_section = ""
@@ -192,7 +186,7 @@ class TelegramNotifier:
         vol_prof_str = ""
         if vol_prof and vol_prof.get("poc"):
             vol_prof_str = f"""
-📦 <b>SESSION VOLUME PROFILE:</b>
+📦 <b>ESTIMATED BAR VOLUME PROFILE:</b>
 • Point of Control (POC): <code>${vol_prof.get('poc', 0):.2f}</code>
 • Value Area: <code>${vol_prof.get('val', 0):.2f} – ${vol_prof.get('vah', 0):.2f}</code>
 • Auction Flow: <b>{vol_prof.get('profile_bias', 'NEUTRAL')}</b>
@@ -205,11 +199,11 @@ class TelegramNotifier:
             c_tp1 = signal.get("calibrated_tp1", tp1)
             c_tp2 = signal.get("calibrated_tp2", tp2)
             calibrated_str = f"""
-📐 <b>EXNESS SPOT CALIBRATED ESTIMATE:</b>
+📐 <b>EXNESS SPOT ESTIMATE (Manual Shift):</b>
 • Entry: <code>{calibrated_entry:.2f}</code>
 • Stop Loss: <code>{c_sl:.2f}</code>
 • TP1 / TP2: <code>{c_tp1:.2f} / {c_tp2:.2f}</code>
-<i>(Calibrated from Futures basis: {signal.get('price_offset', 0.0):+.2f} USD)</i>
+<i>(Shift offset from Futures basis: {signal.get('price_offset', 0.0):+.2f} USD)</i>
 """
 
         msg = f"""
@@ -223,8 +217,8 @@ class TelegramNotifier:
 📍 <b>Reference Entry:</b> <code>{entry_zone_str}</code>
 🛑 <b>Reference Stop:</b> <code>{sl:.2f}</code> | Risk: {risk_pts:.1f}pts
 🎯 <b>TP1 (1.0R):</b> <code>{tp1:.2f}</code>
-🎯 <b>TP2 (2.0R):</b> <code>{tp2:.2f}</code>
-🎯 <b>Target TP3 (3.5R):</b> <code>{tp3_str}</code>
+🎯 <b>TP2 (2.5R):</b> <code>{tp2:.2f}</code>
+🎯 <b>Target TP3 (4.0R):</b> <code>{tp3_str}</code>
 📊 <b>Planned R:R:</b> 1:{rr}
 📦 <b>Reference Sizing:</b> <code>{lot}</code> lots ({risk_mode} | {dollar_risk_str})
 ⏳ <b>Signal valid until:</b> {valid_until}
@@ -235,8 +229,8 @@ class TelegramNotifier:
 • Fundamental boost: {fund_boost:+d} ({confluence.get('fundamental_bias', 'Neutral')})
 • Session boost: {sess_boost:+d} ({sess_tag})
 <b>Final Confluence Score:</b> <b>{score:.0f}/100 ✅ {grade}</b>
-🎯 <b>Win Probability Estimate:</b> {win_prob}
-⚠️ <i>Heuristic score based on confluence weightings — not a guaranteed win rate.</i>
+🎯 <b>Algorithmic Alignment:</b> {factor_display}
+⚠️ <i>Factor-weighted heuristic score — not a guaranteed win rate.</i>
 {vol_prof_str}
 ─────────────────────────────────────
 🔍 <b>WHY THIS TRADE (Technical Factors):</b>
