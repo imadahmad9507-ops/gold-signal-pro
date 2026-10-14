@@ -119,6 +119,65 @@ def check_daily_briefing(notifier: TelegramNotifier, fundamental_res: dict, df_e
                 json.dump(state, f)
 
 
+def check_session_messages(notifier: TelegramNotifier, session_mgr: SessionWatchManager, df_entry_ind: pd.DataFrame, sym_name: str, fundamental_bias: str):
+    """
+    Dispatches pre-open game plan briefings (London at 07:30 UTC, NY at 12:30 UTC, Asian at 22:50 UTC)
+    and session transition summaries once per session using state tracking.
+    """
+    import json
+    now_utc = datetime.now(timezone.utc)
+    today_str = now_utc.strftime("%Y-%m-%d")
+
+    state = {}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+        except Exception:
+            pass
+
+    # Check upcoming session briefing
+    upcoming = session_mgr.get_upcoming_session(now_utc)
+    if upcoming:
+        sess_name = upcoming["session"]
+        key = f"pre_open_{sess_name}_{today_str}"
+        if not state.get(key):
+            plan_text = session_mgr.generate_pre_open_game_plan(
+                df_entry_ind, sym_name, upcoming, fundamental_bias=fundamental_bias
+            )
+            notifier.send_message(plan_text)
+            state[key] = True
+            logger.info(f"Dispatched {sess_name} Pre-Open Briefing to Telegram.")
+
+    # Session close summaries (Asian close 08:00 UTC, London close 17:00 UTC, NY close 21:00 UTC)
+    h = now_utc.hour
+    m = now_utc.minute
+    if 0 <= m <= 20:
+        close_sess = None
+        if h == 8:
+            close_sess = "Asian Session Closed"
+            summary_body = "Asian liquidity range established. London kill zone order flow active."
+        elif h == 17:
+            close_sess = "London Session Closed"
+            summary_body = "London liquidity absorbed. New York afternoon session in effect."
+        elif h == 21:
+            close_sess = "New York Session Closed"
+            summary_body = "New York institutional volume tapered. Entering off-peak Asian drift window."
+
+        if close_sess:
+            ckey = f"close_{h}_{today_str}"
+            if not state.get(ckey):
+                notifier.send_session_summary(f"🔔 {close_sess}", summary_body)
+                state[ckey] = True
+                logger.info(f"Dispatched {close_sess} summary to Telegram.")
+
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.debug(f"Could not persist session message state: {e}")
+
+
 def run_cycle():
     config_path = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
     with open(config_path, "r") as f:
@@ -153,9 +212,24 @@ def run_cycle():
     if upcoming_sess:
         logger.info(f"Session approaching: {upcoming_sess['session']} open in {upcoming_sess['minutes_left']}m")
 
+    # Fetch calendar events to detect upcoming 4-24h macro risks
+    upcoming_events_list = []
+    try:
+        raw_events = news_filter.fetch_calendar()
+        now_dt = datetime.now(timezone.utc)
+        for ev in raw_events:
+            if ev.get("country") == "USD" and ev.get("impact") in ["High"]:
+                ev_d = ev.get("date")
+                if ev_d:
+                    diff_h = (datetime.fromisoformat(ev_d) - now_dt).total_seconds() / 3600.0
+                    if 0 < diff_h <= 24:
+                        upcoming_events_list.append({"title": ev.get("title"), "hours_until": diff_h})
+    except Exception as e:
+        logger.debug(f"Calendar extraction for fundamentals skipped: {e}")
+
     # 4. Evaluate Macro Fundamentals
     logger.info("Evaluating macro fundamentals...")
-    fundamental_res = fund_engine.evaluate_fundamentals()
+    fundamental_res = fund_engine.evaluate_fundamentals(upcoming_events=upcoming_events_list)
     logger.info(f"Fundamental Bias: {fundamental_res['bias']} (Raw: {fundamental_res['raw_score']:+d}/8, Adj: {fundamental_res['confluence_adjustment']:+d})")
 
     instruments = config.get("instruments", {})
@@ -179,6 +253,10 @@ def run_cycle():
                 check_daily_briefing(notifier, fundamental_res, df_entry)
 
             df_entry_ind = calculate_all_indicators(df_entry)
+
+            # Check pre-open game plan and session transition briefings
+            if sym_name == "XAUUSD":
+                check_session_messages(notifier, session_mgr, df_entry_ind, sym_name, fundamental_res.get("bias", "NEUTRAL"))
 
             # Optional DXY feed for intermarket
             df_dxy = None
