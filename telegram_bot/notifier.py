@@ -10,7 +10,7 @@ import os
 import requests
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -269,3 +269,122 @@ class TelegramNotifier:
         """Dispatches session open/close updates."""
         msg = f"<b>{title}</b>\n━━━━━━━━━━━━━━━━━━━━\n{body}"
         return self.send_message(msg.strip())
+
+    def send_near_miss_alert(
+        self,
+        symbol: str,
+        timeframe: str,
+        direction: str,
+        score: float,
+        reasons_failed: List[str],
+        recommended_action: str,
+        key_level: float
+    ) -> bool:
+        """
+        TIER 2: NEAR MISS — Grade A Setup Spotted (Score 70-84)
+        """
+        now_utc = datetime.now(timezone.utc)
+        now_pkt = now_utc + timedelta(hours=5)
+        time_str = f"{now_utc.strftime('%H:%M')} UTC = {now_pkt.strftime('%H:%M')} PKT"
+        reasons_bullet = "\n".join(f"• {r}" for r in reasons_failed)
+
+        msg = f"""
+👀 <b>NEAR MISS — Grade A Setup Spotted</b>
+📍 <b>{symbol}</b> | {timeframe} | <b>{direction}</b>
+<b>Score:</b> {score:.0f}/100 <i>(need 85 for full signal)</i>
+⏰ <b>Time:</b> {time_str}
+
+<b>Why it didn't qualify:</b>
+{reasons_bullet}
+
+<b>What needs to happen:</b>
+• {recommended_action}
+• Watch this level closely
+
+📌 <b>Key level to watch:</b> <code>${key_level:.2f}</code>
+⚠️ <i>Not a trade signal. Monitor manually.</i>
+"""
+        return self.send_message(msg.strip())
+
+    def send_session_scan_update(
+        self,
+        symbol: str,
+        highest_score: float,
+        strategy: str,
+        market_regime: str,
+        next_session_text: str,
+        why_no_signal: str = "Below 85 threshold + R:R too low"
+    ) -> bool:
+        """
+        TIER 3: WATCHING — Grade B (Score 55-69) — Sent maximum once per session
+        """
+        now_pkt = datetime.now(timezone.utc) + timedelta(hours=5)
+        time_str = now_pkt.strftime("%I:%M %p PKT")
+
+        msg = f"""
+📡 <b>MARKET SCAN UPDATE — {time_str}</b>
+━━━━━━━━━━━━━━━━━━━━
+🎯 <b>Highest score seen this session:</b> <b>{highest_score:.0f}/100</b>
+📍 <b>Instrument:</b> {symbol} | <b>Strategy:</b> {strategy}
+⚖️ <b>Why no signal:</b> {why_no_signal}
+📊 <b>Market status:</b> {market_regime}
+⏳ <b>Next session:</b> {next_session_text}
+"""
+        return self.send_message(msg.strip())
+
+    def send_pattern_alert(
+        self,
+        symbol: str,
+        timeframe: str,
+        pattern_name: str,
+        pct_complete: int,
+        prz_range: str,
+        expected_target: float,
+        fib_details: str = "XA ✅ AB ✅ BC ✅ CD forming..."
+    ) -> bool:
+        """
+        TIER 4: WATCHING PATTERN (harmonic or classical chart pattern forming)
+        """
+        msg = f"""
+🔭 <b>PATTERN DEVELOPING — WATCH THIS</b>
+📍 <b>{symbol}</b> | {timeframe}
+<b>Pattern:</b> {pattern_name} ({pct_complete}% complete)
+<b>Current leg:</b> CD forming
+<b>PRZ (Entry Zone when complete):</b> <code>{prz_range}</code>
+<b>Expected completion:</b> Price reaches <code>${expected_target:.2f}</code>
+<b>Fibonacci ratios:</b> {fib_details}
+
+<b>IF price reaches PRZ AND confirmation candle forms:</b>
+→ Bot will automatically evaluate for A+ signal
+
+⏰ <i>Nothing to do now. Just be aware. Will notify when/if it completes.</i>
+"""
+        return self.send_message(msg.strip())
+
+    def send_market_heartbeat(
+        self,
+        current_price: float,
+        change_pct: float,
+        market_regime: str,
+        best_score_session: float,
+        next_session_text: str,
+        next_news_text: str
+    ) -> bool:
+        """
+        Periodic Heartbeat (every ~2 hours when no other notifications sent)
+        """
+        now_pkt = datetime.now(timezone.utc) + timedelta(hours=5)
+        time_str = now_pkt.strftime("%I:%M %p PKT")
+        change_str = f"{change_pct:+.2f}%"
+
+        msg = f"""
+🤖 <b>BOT STATUS — {time_str}</b>
+✅ <b>Running normally</b> | Last scan: &lt;1 min ago
+📊 <b>Gold:</b> <code>${current_price:.2f}</code> | <b>Change:</b> {change_str}
+📈 <b>Market regime:</b> {market_regime}
+🔍 <b>Best score this session:</b> {best_score_session:.0f}/100
+⏳ <b>Next major session:</b> {next_session_text}
+📰 <b>Next news event:</b> {next_news_text}
+"""
+        return self.send_message(msg.strip())
+

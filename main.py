@@ -15,12 +15,15 @@ import yaml
 import logging
 import hashlib
 from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, List, Optional
 import pandas as pd
 
 from data.provider import get_data_provider
 from indicators.engine import calculate_all_indicators
 from analysis.confluence import ConfluenceAnalyzer
 from analysis.fundamental import FundamentalEngine
+from analysis.news_predictor import NewsPredictorEngine
+from patterns.detector import PatternDetector
 from risk.manager import RiskManager
 from risk.hardened_manager import HardenedRiskManager
 from news.calendar import NewsFilter
@@ -178,6 +181,166 @@ def check_session_messages(notifier: TelegramNotifier, session_mgr: SessionWatch
         logger.debug(f"Could not persist session message state: {e}")
 
 
+def check_news_event_analysis(
+    notifier: TelegramNotifier,
+    news_predictor: NewsPredictorEngine,
+    news_filter: NewsFilter,
+    curr_gold_price: float,
+    dxy_context: Optional[dict] = None,
+    yield_context: Optional[dict] = None
+):
+    """
+    Checks upcoming high-impact economic calendar events:
+    - 2 to 4 hours before: Sends detailed PRE-EVENT ANALYSIS scenario planning.
+    - 20 to 45 mins after: Sends POST-EVENT UPDATE with net price change and scenario audit.
+    """
+    import json
+    now_utc = datetime.now(timezone.utc)
+    today_str = now_utc.strftime("%Y-%m-%d")
+
+    state = {}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+        except Exception:
+            pass
+
+    events = news_filter.fetch_calendar()
+    if not events:
+        return
+
+    for ev in events:
+        country = ev.get("country", "")
+        impact = ev.get("impact", "")
+        title = ev.get("title", "")
+        if country != "USD" or impact != "High":
+            continue
+        if not news_predictor.is_major_usd_event(title):
+            continue
+
+        date_iso = ev.get("date")
+        if not date_iso:
+            continue
+
+        try:
+            ev_dt = datetime.fromisoformat(date_iso)
+            diff_minutes = (ev_dt - now_utc).total_seconds() / 60.0
+            ev_id = f"{today_str}_{title}_{ev_dt.strftime('%H%M')}"
+
+            # 1. PRE-EVENT SCENARIOS (Trigger between 100 and 240 mins before release)
+            if 100 <= diff_minutes <= 240:
+                pre_key = f"pre_event_{ev_id}"
+                if not state.get(pre_key):
+                    analysis = news_predictor.generate_pre_event_analysis(
+                        ev,
+                        curr_gold_price,
+                        dxy_data=dxy_context,
+                        real_yield_data=yield_context
+                    )
+                    notifier.send_message(analysis["message"])
+                    state[pre_key] = {
+                        "sent_at": now_utc.isoformat(),
+                        "price_before": curr_gold_price,
+                        "title": title,
+                        "forecast": ev.get("forecast", "N/A")
+                    }
+                    state["last_news_broadcast"] = now_utc.isoformat()
+                    logger.info(f"Dispatched Pre-Event Scenario Analysis for {title}.")
+
+            # 2. POST-EVENT OUTCOME (Trigger between 20 and 50 mins after release)
+            elif -50 <= diff_minutes <= -20:
+                post_key = f"post_event_{ev_id}"
+                pre_record = state.get(f"pre_event_{ev_id}", {})
+                if not state.get(post_key):
+                    price_before = pre_record.get("price_before", curr_gold_price)
+                    actual_val = ev.get("actual", "In-Line")
+                    forecast_val = ev.get("forecast", pre_record.get("forecast", "N/A"))
+                    post_text = news_predictor.generate_post_event_analysis(
+                        title,
+                        str(actual_val),
+                        str(forecast_val),
+                        price_before,
+                        curr_gold_price,
+                        key_level_to_hold=curr_gold_price - 10.0
+                    )
+                    notifier.send_message(post_text)
+                    state[post_key] = True
+                    state["last_news_broadcast"] = now_utc.isoformat()
+                    # Trigger high frequency scan state for next 90 mins
+                    state["post_news_high_freq_until"] = (now_utc + timedelta(minutes=90)).isoformat()
+                    logger.info(f"Dispatched Post-Event Scenario Update for {title}.")
+
+        except Exception as e:
+            logger.debug(f"Error checking news event {title}: {e}")
+
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.debug(f"Could not persist news event state: {e}")
+
+
+def check_periodic_heartbeat(
+    notifier: TelegramNotifier,
+    curr_gold_price: float,
+    change_pct: float,
+    market_regime: str,
+    best_score_session: float,
+    next_session_text: str,
+    next_news_text: str,
+    is_news_blackout: bool = False
+):
+    """
+    Every ~2 hours during active market hours, if NO signal or near-miss
+    has been sent, send a brief market status update.
+    Never sent during news blackout window.
+    """
+    if is_news_blackout or not is_market_open("XAUUSD"):
+        return
+
+    import json
+    now_utc = datetime.now(timezone.utc)
+    state = {}
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+        except Exception:
+            pass
+
+    # Check time since last message of any kind
+    last_notif_str = state.get("last_notification_sent")
+    if last_notif_str:
+        last_dt = datetime.fromisoformat(last_notif_str)
+        hours_passed = (now_utc - last_dt).total_seconds() / 3600.0
+        if hours_passed < 2.0:
+            return  # Within 2 hours of a previous alert
+
+    # Check last heartbeat timestamp
+    last_hb_str = state.get("last_periodic_heartbeat")
+    if last_hb_str:
+        last_hb = datetime.fromisoformat(last_hb_str)
+        if (now_utc - last_hb).total_seconds() / 3600.0 < 2.0:
+            return
+
+    notifier.send_market_heartbeat(
+        curr_gold_price,
+        change_pct,
+        market_regime,
+        best_score_session,
+        next_session_text,
+        next_news_text
+    )
+    state["last_periodic_heartbeat"] = now_utc.isoformat()
+    state["last_notification_sent"] = now_utc.isoformat()
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.debug(f"Could not save periodic heartbeat state: {e}")
+
+
 def run_cycle():
     config_path = os.path.join(os.path.dirname(__file__), "config", "config.yaml")
     with open(config_path, "r") as f:
@@ -318,12 +481,120 @@ def run_cycle():
             tp2 = strategy_candidate["tp2"]
             tp3 = strategy_candidate.get("tp3", tp2)
 
+            news_status = news_filter.check_news_status(sym_name)
+
+            # Check News Predictor Pre/Post Analysis
+            if sym_name == "XAUUSD":
+                check_news_event_analysis(
+                    notifier,
+                    NewsPredictorEngine(config),
+                    news_filter,
+                    entry,
+                    dxy_context=fundamental_res.get("components", {}).get("dxy"),
+                    yield_context=fundamental_res.get("components", {}).get("yields")
+                )
+
             # ══════════════════════════════════════════════
             # 10-POINT FINAL SIGNAL QUALITY GATE
             # ══════════════════════════════════════════════
-            # Gate 1: Technical confluence score >= 85 (Grade A+)
-            # Note: only_send_a_plus strictly enforces >= 85
             min_a_plus = config.get("scoring", {}).get("min_grade_a_plus", 85)
+
+            # ─────────────────────────────────────────────
+            # NEAR MISS DISPATCH LOGIC (Tier 2 & Tier 3)
+            # ─────────────────────────────────────────────
+            last_candle_time = str(df_entry_ind.index[-1])
+            near_miss_raw = f"{sym_name}_{strategy_candidate['strategy']}_{strat_direction}_{last_candle_time[:16]}"
+            near_miss_dedup_key = hashlib.sha256(near_miss_raw.encode()).hexdigest()
+
+            # TIER 2: NEAR MISS — Grade A Setup Spotted (Score 70-84)
+            if 70 <= total_score < min_a_plus:
+                logger.info(f"Signal rejected: Score {total_score} below minimum A+ threshold ({min_a_plus}). Near-miss evaluation.")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_A_PLUS", total_score)
+
+                # Check if news safe and not duplicate
+                if news_status["is_safe"] and not tracker.is_duplicate_signal(f"nm_{near_miss_dedup_key}"):
+                    reasons_failed = [f"Score was {total_score:.0f}/100 (needs {min_a_plus} for Grade A+)"]
+                    sizing_eval = hardened_risk.evaluate_signal_risk(sym_name, entry, stop_loss, tp2, account_type=sym_info.get("account_type"))
+                    if not sizing_eval["approved"]:
+                        reasons_failed.append(f"Risk/RR: {sizing_eval.get('reason', 'R:R below 1:2.5')}")
+                    if session_context.get("session_boost", 0) <= 0:
+                        reasons_failed.append(f"Session: {session_context.get('label', 'Off-peak')} (not in high-volume kill zone)")
+
+                    pullback_level = round(entry - (0.5 * abs(entry - stop_loss)), 2) if strat_direction == "LONG" else round(entry + (0.5 * abs(entry - stop_loss)), 2)
+                    notifier.send_near_miss_alert(
+                        sym_name,
+                        entry_tf,
+                        strat_direction,
+                        total_score,
+                        reasons_failed,
+                        recommended_action=f"Price needs to pull back toward ${pullback_level:.2f} for optimal entry and improved R:R",
+                        key_level=pullback_level
+                    )
+                    tracker.log_new_signal({
+                        "symbol": sym_name,
+                        "timeframe": entry_tf,
+                        "strategy": strategy_candidate["strategy"],
+                        "direction": strat_direction,
+                        "entry": entry,
+                        "stop_loss": stop_loss,
+                        "tp1": tp1,
+                        "tp2": tp2,
+                        "lot_size": 0.01,
+                        "confluence_score": total_score,
+                        "grade": "A",
+                        "status": "NEAR_MISS",
+                        "dedup_key": f"nm_{near_miss_dedup_key}"
+                    })
+                    # Mark state
+                    state_obj = {}
+                    if os.path.exists(STATE_FILE):
+                        try:
+                            with open(STATE_FILE, "r") as sf:
+                                state_obj = json.load(sf)
+                        except Exception:
+                            pass
+                    state_obj["last_notification_sent"] = datetime.now(timezone.utc).isoformat()
+                    try:
+                        with open(STATE_FILE, "w") as sf:
+                            json.dump(state_obj, sf)
+                    except Exception:
+                        pass
+                continue
+
+            # TIER 3: WATCHING — Grade B (Score 55-69) — Sent maximum once per session
+            if 55 <= total_score < 70:
+                logger.info(f"Score {total_score} in Tier 3 watching range.")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_A_PLUS", total_score)
+                state_obj = {}
+                if os.path.exists(STATE_FILE):
+                    try:
+                        with open(STATE_FILE, "r") as sf:
+                            state_obj = json.load(sf)
+                    except Exception:
+                        pass
+                now_utc = datetime.now(timezone.utc)
+                sess_key = f"tier3_scan_{session_context.get('label', 'session')}_{now_utc.strftime('%Y-%m-%d_%H')}"
+                if not state_obj.get(sess_key) and news_status["is_safe"] and sym_name == "XAUUSD":
+                    next_sess = session_mgr.get_upcoming_session(now_utc)
+                    next_sess_str = f"{next_sess['session'].upper()} opens in {next_sess['minutes_left']}m" if next_sess else "Next session approaching"
+                    notifier.send_session_scan_update(
+                        sym_name,
+                        total_score,
+                        strategy_candidate["strategy"],
+                        regime,
+                        next_sess_str,
+                        why_no_signal="Score below 85 threshold + market consolidating"
+                    )
+                    state_obj[sess_key] = True
+                    state_obj["last_notification_sent"] = now_utc.isoformat()
+                    try:
+                        with open(STATE_FILE, "w") as sf:
+                            json.dump(state_obj, sf)
+                    except Exception:
+                        pass
+                continue
+
+            # Gate 1: Technical confluence score >= 85 (Grade A+)
             if total_score < min_a_plus:
                 logger.info(f"Signal rejected: Score {total_score} below minimum A+ threshold ({min_a_plus}).")
                 tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_A_PLUS", total_score)
@@ -347,14 +618,12 @@ def run_cycle():
                 continue
 
             # Gate 4: News Calendar Filter (Fail-Closed, 4-hour hard block)
-            news_status = news_filter.check_news_status(sym_name)
             if not news_status["is_safe"]:
                 logger.warning(f"Trade skipped due to news filter: {news_status.get('upcoming_event')}")
                 tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "NEWS_BLOCKED", total_score, news_status.get("reason", "HIGH_IMPACT_NEWS"))
                 continue
 
             # Gate 5: Deduplication Check
-            last_candle_time = str(df_entry_ind.index[-1])
             dedup_raw = f"{sym_name}_{strategy_candidate['strategy']}_{entry_tf}_{strat_direction}_{last_candle_time}"
             dedup_key = hashlib.sha256(dedup_raw.encode()).hexdigest()
 
@@ -428,6 +697,33 @@ def run_cycle():
 
         except Exception as e:
             logger.error(f"Error processing {sym_name}: {e}", exc_info=True)
+
+    # 12. Periodic Heartbeat Check (every 2 hours if no messages sent)
+    try:
+        # Check if XAUUSD is loaded
+        xau_provider = get_data_provider("yfinance")
+        df_xau, _ = xau_provider.fetch_ohlcv("GC=F", "30m", limit=50)
+        if df_xau is not None and not df_xau.empty:
+            c_price = float(df_xau["close"].iloc[-1])
+            prev_price = float(df_xau["close"].iloc[-2]) if len(df_xau) > 1 else c_price
+            chg = ((c_price - prev_price) / prev_price) * 100.0
+            xau_news = news_filter.check_news_status("XAUUSD")
+            next_news_txt = xau_news.get("upcoming_event") or "No immediate high-impact USD events"
+            next_sess = session_mgr.get_upcoming_session()
+            next_sess_str = f"{next_sess['session'].upper()} opens in {next_sess['minutes_left']}m" if next_sess else "Next session approaching"
+
+            check_periodic_heartbeat(
+                notifier,
+                curr_gold_price=c_price,
+                change_pct=chg,
+                market_regime="CONSOLIDATING" if abs(chg) < 0.3 else "TRENDING",
+                best_score_session=60.0,
+                next_session_text=next_sess_str,
+                next_news_text=next_news_txt,
+                is_news_blackout=not xau_news["is_safe"]
+            )
+    except Exception as he:
+        logger.debug(f"Heartbeat check error: {he}")
 
     stats = tracker.get_performance_stats()
     logger.info(f"Tracker Status: {stats['summary']}")
