@@ -106,7 +106,9 @@ class TelegramNotifier:
         # Signal validity duration
         in_kz = session_info.get("is_peak", False) if session_info else True
         valid_duration = timedelta(hours=1 if in_kz else 2)
-        valid_until = (now_utc + valid_duration).strftime("%H:%M UTC")
+        valid_until_utc = now_utc + valid_duration
+        valid_until_pkt = valid_until_utc + timedelta(hours=5)
+        valid_until = f"{valid_until_utc.strftime('%H:%M')} UTC ({valid_until_pkt.strftime('%I:%M %p')} PKT)"
 
         # Score breakdown components
         tech_score = confluence.get("technical_score", score)
