@@ -19,9 +19,22 @@ instruments:
     min_stop_distance_pips: 1.5
     active_sessions: ["london", "newyork", "london_ny_overlap"]
     live_enabled: false # Quality gate must pass to set true
-    price_offset_calibration: 0.0 # calibration setting for small price differences between Yahoo and Exness
+    price_offset_calibration: -19.5 # Calibrates Yahoo CME Futures (GC=F) to Exness Spot XAUUSD
     account_type: "cent" # Options: "standard" (100 oz/lot) or "cent" (1 oz/lot - XAUUSDc)
     research_alerts_enabled: true # Per-instrument override if desired
+  USOIL:
+    symbol_yf: "CL=F"
+    symbol_alt: "USOUSD"
+    asset_type: "commodity"
+    atr_multiplier: 1.5
+    typical_spread_pips: 0.03
+    pip_value: 1.0 # 1 cent lot = 1 barrel -> 0.01 lot is 0.01 barrel
+    min_stop_distance_pips: 0.20
+    active_sessions: ["london", "newyork", "london_ny_overlap"]
+    live_enabled: false
+    price_offset_calibration: 0.0 # WTI Futures (CL=F) aligns closely with Exness USOIL
+    account_type: "cent" # Exness Crude cent profile
+    research_alerts_enabled: true
   EURUSD:
     symbol_yf: "EURUSD=X"
     asset_type: "forex"
@@ -74,11 +87,11 @@ timeframes:
   supported: ["5m", "15m", "30m", "1h", "4h", "1d"]
 
 scoring:
-  min_grade_a_plus: 85
-  min_grade_a: 75
-  min_grade_b: 68
-  send_grades: ["A+"] # STRICT CAPITAL PROTECTION: Only Grade A+ Prime Setups allowed to fire
-  only_send_a_plus: true # Suppresses all weaker B and standard A setups
+  min_grade_a_plus: 75
+  min_grade_a: 70
+  min_grade_b: 65
+  send_grades: ["A+", "A"] # Dispatches both Grade A+ and Grade A high-quality confluence setups
+  only_send_a_plus: false # Allows verified Grade A setups (70-75+) to trigger alerts
   weights:
     trend: 30
     momentum: 15

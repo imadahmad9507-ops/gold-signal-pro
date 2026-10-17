@@ -399,6 +399,7 @@ def run_cycle():
 
     instruments = config.get("instruments", {})
     entry_tf = config.get("timeframes", {}).get("entry", "30m")
+    session_best_score = 0.0
 
     for sym_name, sym_info in instruments.items():
         if not is_market_open(sym_name):
@@ -497,9 +498,20 @@ def run_cycle():
                 )
 
             # ══════════════════════════════════════════════
+            # ══════════════════════════════════════════════
             # 10-POINT FINAL SIGNAL QUALITY GATE
             # ══════════════════════════════════════════════
-            min_a_plus = config.get("scoring", {}).get("min_grade_a_plus", 85)
+            min_a_plus = config.get("scoring", {}).get("min_grade_a_plus", 75)
+            min_a = config.get("scoring", {}).get("min_grade_a", 70)
+            send_grades = config.get("scoring", {}).get("send_grades", ["A+", "A"])
+            only_send_a_plus = config.get("scoring", {}).get("only_send_a_plus", False)
+
+            # Determine minimum threshold required for active trade dispatch
+            target_min_score = min_a_plus if (only_send_a_plus or "A" not in send_grades) else min_a
+
+            # Track session highest score dynamically
+            if total_score > session_best_score:
+                session_best_score = float(total_score)
 
             # ─────────────────────────────────────────────
             # NEAR MISS DISPATCH LOGIC (Tier 2 & Tier 3)
@@ -508,14 +520,14 @@ def run_cycle():
             near_miss_raw = f"{sym_name}_{strategy_candidate['strategy']}_{strat_direction}_{last_candle_time[:16]}"
             near_miss_dedup_key = hashlib.sha256(near_miss_raw.encode()).hexdigest()
 
-            # TIER 2: NEAR MISS — Grade A Setup Spotted (Score 70-84)
-            if 70 <= total_score < min_a_plus:
-                logger.info(f"Signal rejected: Score {total_score} below minimum A+ threshold ({min_a_plus}). Near-miss evaluation.")
-                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_A_PLUS", total_score)
+            # TIER 2: NEAR MISS — Setup below active execution threshold but worthy of alert (Score 65 to threshold)
+            if 65 <= total_score < target_min_score:
+                logger.info(f"Signal rejected: Score {total_score} below minimum threshold ({target_min_score}). Near-miss evaluation.")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_THRESHOLD", total_score)
 
                 # Check if news safe and not duplicate
                 if news_status["is_safe"] and not tracker.is_duplicate_signal(f"nm_{near_miss_dedup_key}"):
-                    reasons_failed = [f"Score was {total_score:.0f}/100 (needs {min_a_plus} for Grade A+)"]
+                    reasons_failed = [f"Score was {total_score:.0f}/100 (needs {target_min_score} for Signal Dispatch)"]
                     sizing_eval = hardened_risk.evaluate_signal_risk(sym_name, entry, stop_loss, tp2, account_type=sym_info.get("account_type"))
                     if not sizing_eval["approved"]:
                         reasons_failed.append(f"Risk/RR: {sizing_eval.get('reason', 'R:R below 1:2.5')}")
@@ -543,7 +555,7 @@ def run_cycle():
                         "tp2": tp2,
                         "lot_size": 0.01,
                         "confluence_score": total_score,
-                        "grade": "A",
+                        "grade": grade,
                         "status": "NEAR_MISS",
                         "dedup_key": f"nm_{near_miss_dedup_key}"
                     })
@@ -563,10 +575,10 @@ def run_cycle():
                         pass
                 continue
 
-            # TIER 3: WATCHING — Grade B (Score 55-69) — Sent maximum once per session
-            if 55 <= total_score < 70:
+            # TIER 3: WATCHING — Grade B (Score 55-64) — Sent maximum once per session
+            if 55 <= total_score < 65:
                 logger.info(f"Score {total_score} in Tier 3 watching range.")
-                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_A_PLUS", total_score)
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_THRESHOLD", total_score)
                 state_obj = {}
                 if os.path.exists(STATE_FILE):
                     try:
@@ -585,7 +597,7 @@ def run_cycle():
                         strategy_candidate["strategy"],
                         regime,
                         next_sess_str,
-                        why_no_signal="Score below 85 threshold + market consolidating"
+                        why_no_signal=f"Score below {target_min_score} threshold + market consolidating"
                     )
                     state_obj[sess_key] = True
                     state_obj["last_notification_sent"] = now_utc.isoformat()
@@ -623,10 +635,10 @@ def run_cycle():
 
                 continue
 
-            # Gate 1: Technical confluence score >= 85 (Grade A+)
-            if total_score < min_a_plus:
-                logger.info(f"Signal rejected: Score {total_score} below minimum A+ threshold ({min_a_plus}).")
-                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_A_PLUS", total_score)
+            # Gate 1: Technical confluence score >= target threshold (Grade A/A+)
+            if total_score < target_min_score:
+                logger.info(f"Signal rejected: Score {total_score} below minimum threshold ({target_min_score}).")
+                tracker.log_journal_entry(sym_name, strategy_candidate["strategy"], strat_direction, "SCORE_BELOW_THRESHOLD", total_score)
                 continue
 
             # Gate 2: Fundamental conflict check
@@ -776,7 +788,7 @@ def run_cycle():
                 curr_gold_price=c_price,
                 change_pct=chg,
                 market_regime="CONSOLIDATING" if abs(chg) < 0.3 else "TRENDING",
-                best_score_session=60.0,
+                best_score_session=session_best_score if session_best_score > 0 else 60.0,
                 next_session_text=next_sess_str,
                 next_news_text=next_news_txt,
                 is_news_blackout=not xau_news["is_safe"]

@@ -372,3 +372,62 @@ def test_force_dispatch_env_variable_parsing(monkeypatch):
     assert check_dispatch("some_random_value") is False
 
 
+def test_usoil_contract_spec_and_sizing():
+    """
+    Verify USOIL and USOILc contract specifications and sizing:
+    - USOIL standard: 100 barrels/lot. At 0.01 lot with $0.50 stop loss:
+      loss = 0.01 * 100 * 0.50 = $0.50 USD. Exceeds $0.125 ceiling -> rejected.
+    - USOILc cent: 1 barrel/lot. At 0.01 lot with $0.50 stop loss:
+      loss = 0.01 * 1.0 * 0.50 = $0.005 USD. Well within $0.125 ceiling -> approved!
+    """
+    cfg_cent = {
+        "risk": {
+            "account_currency": "USC",
+            "account_balance_usc": 5000.0,
+            "account_type": "cent",
+            "risk_per_trade_percent": 0.25,
+            "min_risk_reward": 2.5
+        }
+    }
+    mgr = HardenedRiskManager(cfg_cent)
+
+    # Standard USOIL on $50 equity: rejected
+    res_std = mgr.evaluate_signal_risk("USOIL", entry=98.0, stop_loss=97.50, tp2=99.50, account_type="standard")
+    assert res_std["approved"] is False
+    assert "RISK_LIMIT_UNACHIEVABLE_AT_MINIMUM_SIZE" in res_std["reason"]
+
+    # Cent USOIL (USOILc) on $50 equity: approved at safe lot
+    res_cent = mgr.evaluate_signal_risk("USOIL", entry=98.0, stop_loss=97.50, tp2=99.50, account_type="cent")
+    assert res_cent["approved"] is True
+    assert res_cent["lot_size"] >= 0.01
+    assert res_cent["dollar_risk"] <= 0.125
+
+
+def test_grade_a_scoring_threshold():
+    """
+    Verify that when send_grades contains 'A' and only_send_a_plus is False,
+    the dispatch threshold aligns with min_grade_a (e.g. 70) rather than 85.
+    """
+    cfg = {
+        "scoring": {
+            "min_grade_a_plus": 75,
+            "min_grade_a": 70,
+            "min_grade_b": 65,
+            "send_grades": ["A+", "A"],
+            "only_send_a_plus": False
+        }
+    }
+    send_grades = cfg["scoring"]["send_grades"]
+    only_a_plus = cfg["scoring"]["only_send_a_plus"]
+    min_a = cfg["scoring"]["min_grade_a"]
+    min_a_plus = cfg["scoring"]["min_grade_a_plus"]
+
+    target_min_score = min_a_plus if (only_a_plus or "A" not in send_grades) else min_a
+    assert target_min_score == 70
+
+    # A score of 72 qualifies for signal dispatch
+    score = 72
+    assert score >= target_min_score
+
+
+

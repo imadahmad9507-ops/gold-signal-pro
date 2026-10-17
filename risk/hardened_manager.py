@@ -106,6 +106,46 @@ class HardenedRiskManager:
                 "mt5_verified": False
             }
 
+        # ── Standard Exness WTI Crude Oil CFD (USD account) ───────────────────
+        elif symbol in ("USOIL", "CL=F", "WTI"):
+            return {
+                "symbol": symbol,
+                "contract_size": 100.0,       # 100 barrels per standard lot
+                "min_lot": 0.01,
+                "lot_step": 0.01,
+                "max_lot": 20.0,
+                "tick_size": 0.01,            # $0.01 price step
+                "tick_value_per_lot": 1.0,    # $1.00 per $0.01 move on 1.0 lot
+                "typical_spread": inst.get("typical_spread_pips", 0.03),
+                "commission_per_lot": inst.get("commission_per_lot", 0.0),
+                "estimated_slippage": inst.get("estimated_slippage", 0.02),
+                "account_currency": "USD",
+                "is_cent_account": False,
+                "exchange_rate_to_usd": 1.0,
+                "spec_source": "assumed_specification",
+                "mt5_verified": False
+            }
+
+        # ── Exness Cent Account Crude Oil CFD (USOILc / Cent lot) ─────────────
+        elif symbol in ("USOILc", "CL=Fc"):
+            return {
+                "symbol": symbol,
+                "contract_size": 1.0,         # 1 barrel per cent lot
+                "min_lot": 0.01,
+                "lot_step": 0.01,
+                "max_lot": 200.0,
+                "tick_size": 0.01,            # $0.01 price step
+                "tick_value_per_lot": 0.01,   # $0.01 per $0.01 move on 1.0 cent lot
+                "typical_spread": inst.get("typical_spread_pips", 0.03),
+                "commission_per_lot": 0.0,
+                "estimated_slippage": 0.02,
+                "account_currency": "USC",
+                "is_cent_account": True,
+                "exchange_rate_to_usd": 1.0,
+                "spec_source": "assumed_specification",
+                "mt5_verified": False
+            }
+
         # ── Forex instruments (standard 100k lot) ───────────────────────────
         elif asset_type == "forex":
             return {
@@ -471,12 +511,16 @@ class HardenedRiskManager:
         else:
             use_cent = (cfg_acct_type in ("cent", "usc", "cent_account")) or (cfg_acct_curr == "USC")
 
-        # Map commodity gold to XAUUSDc if cent account sizing profile is active
-        target_symbol = (
-            "XAUUSDc"
-            if (use_cent and ("XAU" in symbol or "GC" in symbol))
-            else symbol
-        )
+        # Map commodity to cent symbol if cent account sizing profile is active
+        if use_cent:
+            if "XAU" in symbol or "GC" in symbol:
+                target_symbol = "XAUUSDc"
+            elif "USOIL" in symbol or "CL" in symbol or "WTI" in symbol:
+                target_symbol = "USOILc"
+            else:
+                target_symbol = symbol
+        else:
+            target_symbol = symbol
 
         res = self.evaluate_and_size_trade(target_symbol, bias, entry, stop_loss, tp2)
         if res["approved"]:
