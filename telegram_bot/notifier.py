@@ -171,7 +171,7 @@ class TelegramNotifier:
         # AI Visual section
         visual_section = ""
         if visual_data and visual_data.get("is_available"):
-            visual_section = f"\n🤖 <b>AI Visual Analysis:</b> {visual_data.get('bias')} ({visual_data.get('confidence')}% conf) — {visual_data.get('summary')}\n"
+            visual_section = f"\n🤖 <b>AI Chart Check:</b> {visual_data.get('bias')} ({visual_data.get('confidence')}% conf) — {visual_data.get('summary')}\n"
 
         # Format TP3 safely whether float or str
         tp3_val = signal.get("tp3", "N/A")
@@ -185,11 +185,13 @@ class TelegramNotifier:
         vol_prof = signal.get("volume_profile") or confluence.get("volume_profile")
         vol_prof_str = ""
         if vol_prof and vol_prof.get("poc"):
+            vol_bias_raw = vol_prof.get('profile_bias', 'NEUTRAL')
+            vol_bias_clean = "Bullish (Buyers in control)" if "BULL" in vol_bias_raw else ("Bearish (Sellers in control)" if "BEAR" in vol_bias_raw else "Balanced")
             vol_prof_str = f"""
-📦 <b>ESTIMATED BAR VOLUME PROFILE:</b>
-• Point of Control (POC): <code>${vol_prof.get('poc', 0):.2f}</code>
-• Value Area: <code>${vol_prof.get('val', 0):.2f} – ${vol_prof.get('vah', 0):.2f}</code>
-• Auction Flow: <b>{vol_prof.get('profile_bias', 'NEUTRAL')}</b>
+📦 <b>VOLUME ZONE (Most Traded Price):</b>
+• Heaviest Volume Price: <code>${vol_prof.get('poc', 0):.2f}</code>
+• Value Range: <code>${vol_prof.get('val', 0):.2f} – ${vol_prof.get('vah', 0):.2f}</code>
+• Volume Direction: <b>{vol_bias_clean}</b>
 """
 
         calibrated_str = ""
@@ -199,49 +201,49 @@ class TelegramNotifier:
             c_tp1 = signal.get("calibrated_tp1", tp1)
             c_tp2 = signal.get("calibrated_tp2", tp2)
             calibrated_str = f"""
-📐 <b>EXNESS SPOT ESTIMATE (Manual Shift):</b>
-• Entry: <code>{calibrated_entry:.2f}</code>
+📐 <b>EXNESS SPOT ESTIMATE (Direct Chart Levels):</b>
+• Entry Price: <code>{calibrated_entry:.2f}</code>
 • Stop Loss: <code>{c_sl:.2f}</code>
-• TP1 / TP2: <code>{c_tp1:.2f} / {c_tp2:.2f}</code>
-<i>(Shift offset from Futures basis: {signal.get('price_offset', 0.0):+.2f} USD)</i>
+• Target 1 / Target 2: <code>{c_tp1:.2f} / {c_tp2:.2f}</code>
+<i>(Basis difference adjusted: {signal.get('price_offset', 0.0):+.2f} USD)</i>
 """
 
         msg = f"""
-🔔 <b>GOLD SIGNAL — A+ PRIME SETUP ⭐</b>
+🔔 <b>GOLD SIGNAL — GRADE {grade} SETUP ⭐</b>
 ⚡ <b>RESEARCH ALERT: {symbol}</b> ({tf})
-📍 <b>{symbol}</b> | {tf} entry | 1H/4H confirmed | <code>{source_info}</code> [REFERENCE-ONLY]
+📍 <b>{symbol}</b> | {tf} chart | 1H/4H confirmed | <code>{source_info}</code> [REFERENCE-ONLY]
 ⚙️ <b>Spec Status:</b> <code>{spec_status}</code>
 ⏰ <b>{time_str}</b> | {sess_tag}
 
 {emoji}
 📍 <b>Reference Entry:</b> <code>{entry_zone_str}</code>
 🛑 <b>Reference Stop:</b> <code>{sl:.2f}</code> | Risk: {risk_pts:.1f}pts
-🎯 <b>TP1 (1.0R):</b> <code>{tp1:.2f}</code>
-🎯 <b>TP2 (2.5R):</b> <code>{tp2:.2f}</code>
-🎯 <b>Target TP3 (4.0R):</b> <code>{tp3_str}</code>
-📊 <b>Planned R:R:</b> 1:{rr}
+🎯 <b>Target 1 (1.0R):</b> <code>{tp1:.2f}</code>
+🎯 <b>Target 2 (2.5R):</b> <code>{tp2:.2f}</code>
+🎯 <b>Target 3 (4.0R):</b> <code>{tp3_str}</code>
+📊 <b>Reward-to-Risk:</b> 1:{rr}
 📦 <b>Reference Sizing:</b> <code>{lot}</code> lots ({risk_mode} | {dollar_risk_str})
-⏳ <b>Signal valid until:</b> {valid_until}
+⏳ <b>Valid until:</b> {valid_until}
 {calibrated_str}
 ─────────────────────────────────────
-📊 <b>SCORE BREAKDOWN</b>
-• Technical: {tech_score:.0f}/100
-• Fundamental boost: {fund_boost:+d} ({confluence.get('fundamental_bias', 'Neutral')})
-• Session boost: {sess_boost:+d} ({sess_tag})
-<b>Final Confluence Score:</b> <b>{score:.0f}/100 ✅ {grade}</b>
-🎯 <b>Algorithmic Alignment:</b> {factor_display}
-⚠️ <i>Factor-weighted heuristic score — not a guaranteed win rate.</i>
+📊 <b>SETUP STRENGTH SCORE</b>
+• Technical Analysis: {tech_score:.0f}/100
+• News & Macro boost: {fund_boost:+d} ({confluence.get('fundamental_bias', 'Neutral')})
+• Session Activity boost: {sess_boost:+d} ({sess_tag})
+<b>Total Confluence Score:</b> <b>{score:.0f}/100 ✅ {grade}</b>
+🎯 <b>Signal Alignment:</b> {factor_display}
+⚠️ <i>Statistical scoring model — always use proper risk management.</i>
 {vol_prof_str}
 ─────────────────────────────────────
-🔍 <b>WHY THIS TRADE (Technical Factors):</b>
+🔍 <b>REASONS FOR THIS SETUP:</b>
 {tech_reasons}
 {fund_section}
 
 ─────────────────────────────────────
-⚠️ <b>INVALIDATION:</b> Decisive close beyond <code>{sl:.2f}</code>
-📰 <b>Next High-Impact News:</b> {next_news_text}
+⚠️ <b>STOP TRADE IF:</b> Candle closes past <code>{sl:.2f}</code>
+📰 <b>Upcoming News:</b> {next_news_text}
 {visual_section}🏦 <b>Data Source:</b> <code>Yahoo GC=F (REFERENCE ONLY)</code>
-   <i>Verify entry on your Exness terminal chart before trading.</i>
+   <i>Double check price on your Exness chart before entering.</i>
 
 ⚠️ <i>RESEARCH SIGNAL ONLY — NOT FINANCIAL ADVICE.</i>
    <i>Cent account forward-test demo only. Always apply stop loss.</i>
@@ -309,28 +311,30 @@ class TelegramNotifier:
         key_level: float
     ) -> bool:
         """
-        TIER 2: NEAR MISS — Grade A Setup Spotted (Score 70-84)
+        TIER 2: NEAR MISS — Grade A Setup Spotted
         """
         now_utc = datetime.now(timezone.utc)
         now_pkt = now_utc + timedelta(hours=5)
         time_str = f"{now_utc.strftime('%H:%M')} UTC = {now_pkt.strftime('%H:%M')} PKT"
         reasons_bullet = "\n".join(f"• {r}" for r in reasons_failed)
 
+        action_word = "Buy Setup" if "LONG" in direction.upper() or "BUY" in direction.upper() else "Sell Setup"
+
         msg = f"""
-👀 <b>NEAR MISS — Grade A Setup Spotted</b>
-📍 <b>{symbol}</b> | {timeframe} | <b>{direction}</b>
-<b>Score:</b> {score:.0f}/100 <i>(need 85 for full signal)</i>
+👀 <b>POTENTIAL TRADE WATCHING — {action_word}</b>
+📍 <b>Market:</b> {symbol} | {timeframe} chart
+<b>Setup Score:</b> <b>{score:.0f}/100</b>
 ⏰ <b>Time:</b> {time_str}
 
-<b>Why it didn't qualify:</b>
+<b>Why not entering yet:</b>
 {reasons_bullet}
 
-<b>What needs to happen:</b>
+<b>What we are waiting for:</b>
 • {recommended_action}
 • Watch this level closely
 
-📌 <b>Key level to watch:</b> <code>${key_level:.2f}</code>
-⚠️ <i>Not a trade signal. Monitor manually.</i>
+📌 <b>Key Price to Watch:</b> <code>${key_level:.2f}</code>
+⚠️ <i>Not an active signal. Waiting for better entry price.</i>
 """
         return self.send_message(msg.strip())
 
@@ -341,7 +345,7 @@ class TelegramNotifier:
         strategy: str,
         market_regime: str,
         next_session_text: str,
-        why_no_signal: str = "Below 85 threshold + R:R too low"
+        why_no_signal: str = "Market moving sideways + waiting for higher quality setup"
     ) -> bool:
         """
         TIER 3: WATCHING — Grade B (Score 55-69) — Sent maximum once per session
@@ -349,14 +353,17 @@ class TelegramNotifier:
         now_pkt = datetime.now(timezone.utc) + timedelta(hours=5)
         time_str = now_pkt.strftime("%I:%M %p PKT")
 
+        # Plain human words instead of CONSOLIDATING
+        condition_clean = "Moving Sideways (Ranging)" if "CONSOLIDAT" in market_regime.upper() else ("Trending Strongly" if "TREND" in market_regime.upper() else market_regime)
+
         msg = f"""
 📡 <b>MARKET SCAN UPDATE — {time_str}</b>
 ━━━━━━━━━━━━━━━━━━━━
-🎯 <b>Highest score seen this session:</b> <b>{highest_score:.0f}/100</b>
-📍 <b>Instrument:</b> {symbol} | <b>Strategy:</b> {strategy}
-⚖️ <b>Why no signal:</b> {why_no_signal}
-📊 <b>Market status:</b> {market_regime}
-⏳ <b>Next session:</b> {next_session_text}
+🎯 <b>Best score seen this session:</b> <b>{highest_score:.0f}/100</b>
+📍 <b>Market:</b> {symbol} | <b>Strategy:</b> {strategy}
+⚖️ <b>Current Status:</b> {why_no_signal}
+📊 <b>Market Condition:</b> {condition_clean}
+⏳ <b>Next Market Session:</b> {next_session_text}
 """
         return self.send_message(msg.strip())
 
@@ -374,18 +381,14 @@ class TelegramNotifier:
         TIER 4: WATCHING PATTERN (harmonic or classical chart pattern forming)
         """
         msg = f"""
-🔭 <b>PATTERN DEVELOPING — WATCH THIS</b>
-📍 <b>{symbol}</b> | {timeframe}
+🔭 <b>CHART PATTERN FORMING — WATCH THIS</b>
+📍 <b>Market:</b> {symbol} | {timeframe}
 <b>Pattern:</b> {pattern_name} ({pct_complete}% complete)
-<b>Current leg:</b> CD forming
-<b>PRZ (Entry Zone when complete):</b> <code>{prz_range}</code>
-<b>Expected completion:</b> Price reaches <code>${expected_target:.2f}</code>
-<b>Fibonacci ratios:</b> {fib_details}
+<b>Current step:</b> Forming final swing
+<b>Entry Zone if completed:</b> <code>{prz_range}</code>
+<b>Target Price:</b> <code>${expected_target:.2f}</code>
 
-<b>IF price reaches PRZ AND confirmation candle forms:</b>
-→ Bot will automatically evaluate for A+ signal
-
-⏰ <i>Nothing to do now. Just be aware. Will notify when/if it completes.</i>
+💡 <i>Nothing to do now. Bot will automatically alert you if a full signal triggers.</i>
 """
         return self.send_message(msg.strip())
 
@@ -405,14 +408,17 @@ class TelegramNotifier:
         time_str = now_pkt.strftime("%I:%M %p PKT")
         change_str = f"{change_pct:+.2f}%"
 
+        # Plain human words instead of CONSOLIDATING
+        condition_clean = "Moving Sideways (Ranging)" if "CONSOLIDAT" in market_regime.upper() else ("Trending Cleanly" if "TREND" in market_regime.upper() else market_regime)
+
         msg = f"""
 🤖 <b>BOT STATUS — {time_str}</b>
 ✅ <b>Running normally</b> | Last scan: &lt;1 min ago
-📊 <b>Gold:</b> <code>${current_price:.2f}</code> | <b>Change:</b> {change_str}
-📈 <b>Market regime:</b> {market_regime}
+📊 <b>Gold Price:</b> <code>${current_price:.2f}</code> | <b>Change:</b> {change_str}
+📈 <b>Market Condition:</b> {condition_clean}
 🔍 <b>Best score this session:</b> {best_score_session:.0f}/100
-⏳ <b>Next major session:</b> {next_session_text}
-📰 <b>Next news event:</b> {next_news_text}
+⏳ <b>Next market session:</b> {next_session_text}
+📰 <b>Upcoming news:</b> {next_news_text}
 """
         return self.send_message(msg.strip())
 
