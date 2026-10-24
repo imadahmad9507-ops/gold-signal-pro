@@ -53,8 +53,8 @@ class TrendPullbackStrategy(BaseStrategy):
                 "entry": c,
                 "stop_loss": sl,
                 "tp1": c + 1.0 * rd,
-                "tp2": c + 2.0 * rd,
-                "tp3": c + 3.5 * rd,
+                "tp2": c + 2.8 * rd,
+                "tp3": c + 4.0 * rd,
                 "reason": f"Pullback to EMA 20 ({ema20:.2f}) with bullish resumption candle"
             }
 
@@ -69,8 +69,8 @@ class TrendPullbackStrategy(BaseStrategy):
                 "entry": c,
                 "stop_loss": sl,
                 "tp1": c - 1.0 * rd,
-                "tp2": c - 2.0 * rd,
-                "tp3": c - 3.5 * rd,
+                "tp2": c - 2.8 * rd,
+                "tp3": c - 4.0 * rd,
                 "reason": f"Pullback to EMA 20 ({ema20:.2f}) with bearish rejection candle"
             }
         return None
@@ -101,8 +101,8 @@ class BreakoutRetestStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] + 1.0 * rd,
-                "tp2": last['close'] + 2.0 * rd,
-                "tp3": last['close'] + 3.5 * rd,
+                "tp2": last['close'] + 2.8 * rd,
+                "tp3": last['close'] + 4.0 * rd,
                 "reason": f"Successful retest of key breakout level {h20:.2f}"
             }
 
@@ -117,8 +117,8 @@ class BreakoutRetestStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] - 1.0 * rd,
-                "tp2": last['close'] - 2.0 * rd,
-                "tp3": last['close'] - 3.5 * rd,
+                "tp2": last['close'] - 2.8 * rd,
+                "tp3": last['close'] - 4.0 * rd,
                 "reason": f"Successful retest of breakdown level {l20:.2f}"
             }
         return None
@@ -147,8 +147,8 @@ class RangeReversalStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] + 1.0 * rd,
-                "tp2": last['bb_middle'],
-                "tp3": bb_high,
+                "tp2": max(last['bb_middle'], last['close'] + 2.8 * rd),
+                "tp3": max(bb_high, last['close'] + 4.0 * rd),
                 "reason": f"Mean-reversion bounce off lower Bollinger band ({bb_low:.2f}) with RSI {last['rsi_14']:.1f}"
             }
 
@@ -163,8 +163,8 @@ class RangeReversalStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] - 1.0 * rd,
-                "tp2": last['bb_middle'],
-                "tp3": bb_low,
+                "tp2": min(last['bb_middle'], last['close'] - 2.8 * rd),
+                "tp3": min(bb_low, last['close'] - 4.0 * rd),
                 "reason": f"Mean-reversion rejection off upper Bollinger band ({bb_high:.2f}) with RSI {last['rsi_14']:.1f}"
             }
         return None
@@ -195,8 +195,8 @@ class SmartMoneyLiquidityStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] + 1.0 * rd,
-                "tp2": last['close'] + 2.0 * rd,
-                "tp3": prior_high,
+                "tp2": last['close'] + 2.8 * rd,
+                "tp3": prior_high if (prior_high - last['close']) >= 2.8 * rd else (last['close'] + 4.0 * rd),
                 "reason": f"Liquidity sweep below prior low {prior_low:.2f} + institutional reclamation candle"
             }
 
@@ -211,8 +211,8 @@ class SmartMoneyLiquidityStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] - 1.0 * rd,
-                "tp2": last['close'] - 2.0 * rd,
-                "tp3": prior_low,
+                "tp2": last['close'] - 2.8 * rd,
+                "tp3": prior_low if (last['close'] - prior_low) >= 2.8 * rd else (last['close'] - 4.0 * rd),
                 "reason": f"Liquidity sweep above prior high {prior_high:.2f} + institutional sell order block"
             }
         return None
@@ -245,8 +245,8 @@ class SessionBreakoutStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] + 1.0 * rd,
-                "tp2": last['close'] + 2.0 * rd,
-                "tp3": last['close'] + 3.0 * rd,
+                "tp2": last['close'] + 2.8 * rd,
+                "tp3": last['close'] + 4.0 * rd,
                 "reason": f"Session opening range expansion breakout above {range_h:.2f}"
             }
         elif last['close'] < range_l:
@@ -259,8 +259,8 @@ class SessionBreakoutStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] - 1.0 * rd,
-                "tp2": last['close'] - 2.0 * rd,
-                "tp3": last['close'] - 3.0 * rd,
+                "tp2": last['close'] - 2.8 * rd,
+                "tp3": last['close'] - 4.0 * rd,
                 "reason": f"Session opening range breakdown below {range_l:.2f}"
             }
         return None
@@ -289,8 +289,8 @@ class VolatilitySqueezeStrategy(BaseStrategy):
                     "entry": last['close'],
                     "stop_loss": sl,
                     "tp1": last['close'] + 1.0 * rd,
-                    "tp2": last['close'] + 2.0 * rd,
-                    "tp3": last['close'] + 3.5 * rd,
+                    "tp2": last['close'] + 2.8 * rd,
+                    "tp3": last['close'] + 4.0 * rd,
                     "reason": "Bollinger squeeze volatility expansion breakout to the upside"
                 }
             elif last['close'] < last['bb_lower']:
@@ -303,8 +303,8 @@ class VolatilitySqueezeStrategy(BaseStrategy):
                     "entry": last['close'],
                     "stop_loss": sl,
                     "tp1": last['close'] - 1.0 * rd,
-                    "tp2": last['close'] - 2.0 * rd,
-                    "tp3": last['close'] - 3.5 * rd,
+                    "tp2": last['close'] - 2.8 * rd,
+                    "tp3": last['close'] - 4.0 * rd,
                     "reason": "Bollinger squeeze volatility expansion breakdown to the downside"
                 }
         return None
@@ -334,8 +334,8 @@ class DivergenceReversalStrategy(BaseStrategy):
                     "entry": last['close'],
                     "stop_loss": sl,
                     "tp1": last['close'] + 1.0 * rd,
-                    "tp2": last['close'] + 2.0 * rd,
-                    "tp3": last['close'] + 3.0 * rd,
+                    "tp2": last['close'] + 2.8 * rd,
+                    "tp3": last['close'] + 4.0 * rd,
                     "reason": f"Bullish RSI divergence (Price {l2['low']:.2f} vs RSI {l2['rsi_14']:.1f})"
                 }
 
@@ -352,8 +352,8 @@ class DivergenceReversalStrategy(BaseStrategy):
                     "entry": last['close'],
                     "stop_loss": sl,
                     "tp1": last['close'] - 1.0 * rd,
-                    "tp2": last['close'] - 2.0 * rd,
-                    "tp3": last['close'] - 3.0 * rd,
+                    "tp2": last['close'] - 2.8 * rd,
+                    "tp3": last['close'] - 4.0 * rd,
                     "reason": f"Bearish RSI divergence (Price {h2['high']:.2f} vs RSI {h2['rsi_14']:.1f})"
                 }
         return None
@@ -382,8 +382,8 @@ class KeyLevelReactionStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] - 1.0 * rd,
-                "tp2": last['close'] - 2.0 * rd,
-                "tp3": pdl,
+                "tp2": last['close'] - 2.8 * rd,
+                "tp3": pdl if (last['close'] - pdl) >= 2.8 * rd else (last['close'] - 4.0 * rd),
                 "reason": f"Bearish rejection off Previous Day High ({pdh:.2f})"
             }
 
@@ -398,8 +398,8 @@ class KeyLevelReactionStrategy(BaseStrategy):
                 "entry": last['close'],
                 "stop_loss": sl,
                 "tp1": last['close'] + 1.0 * rd,
-                "tp2": last['close'] + 2.0 * rd,
-                "tp3": pdh,
+                "tp2": last['close'] + 2.8 * rd,
+                "tp3": pdh if (pdh - last['close']) >= 2.8 * rd else (last['close'] + 4.0 * rd),
                 "reason": f"Bullish bounce off Previous Day Low ({pdl:.2f})"
             }
         return None

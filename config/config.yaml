@@ -109,7 +109,7 @@ risk:
   risk_per_trade_percent: 0.25 # 0.25% risk per trade (12.5 USC / $0.125 max loss on $50 account)
   min_risk_reward: 2.5        # Demand minimum 1:2.5 R:R (strict high reward)
   tp1_r: 1.0
-  tp2_r: 2.5
+  tp2_r: 2.8
   tp3_r: 4.0
   max_concurrent_signals: 1   # Only 1 trade at a time to prevent overexposure
   cooldown_bars_per_symbol: 6 # Mandatory wait period between setups

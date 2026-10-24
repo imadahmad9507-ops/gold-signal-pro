@@ -67,8 +67,8 @@ class SessionHunterStrategy(BaseStrategy):
                     "entry": c,
                     "stop_loss": sl,
                     "tp1": c + 1.0 * rd,
-                    "tp2": c + 2.0 * rd,
-                    "tp3": asian_high,
+                    "tp2": c + 2.8 * rd,
+                    "tp3": asian_high if (asian_high - c) >= 2.8 * rd else (c + 4.0 * rd),
                     "reason": f"Judas swing liquidity sweep below Asian low ({asian_low:.2f}) + bullish reclamation"
                 }
 
@@ -84,8 +84,8 @@ class SessionHunterStrategy(BaseStrategy):
                     "entry": c,
                     "stop_loss": sl,
                     "tp1": c - 1.0 * rd,
-                    "tp2": c - 2.0 * rd,
-                    "tp3": asian_low,
+                    "tp2": c - 2.8 * rd,
+                    "tp3": asian_low if (c - asian_low) >= 2.8 * rd else (c - 4.0 * rd),
                     "reason": f"Judas swing liquidity sweep above Asian high ({asian_high:.2f}) + bearish rejection"
                 }
 
@@ -108,8 +108,8 @@ class SessionHunterStrategy(BaseStrategy):
                             "entry": c,
                             "stop_loss": sl,
                             "tp1": c + 1.0 * rd,
-                            "tp2": c + 2.0 * rd,
-                            "tp3": c + 3.5 * rd,
+                            "tp2": c + 2.8 * rd,
+                            "tp3": c + 4.0 * rd,
                             "reason": f"Silver Bullet fresh bullish FVG ({fvg_low:.2f}–{fvg_high:.2f}) during 15:00-16:00 UTC window"
                         }
                 # Bearish FVG: c1 low > c3 high
@@ -125,8 +125,8 @@ class SessionHunterStrategy(BaseStrategy):
                             "entry": c,
                             "stop_loss": sl,
                             "tp1": c - 1.0 * rd,
-                            "tp2": c - 2.0 * rd,
-                            "tp3": c - 3.5 * rd,
+                            "tp2": c - 2.8 * rd,
+                            "tp3": c - 4.0 * rd,
                             "reason": f"Silver Bullet fresh bearish FVG ({fvg_low:.2f}–{fvg_high:.2f}) during 15:00-16:00 UTC window"
                         }
 
@@ -145,8 +145,8 @@ class SessionHunterStrategy(BaseStrategy):
                         "entry": c,
                         "stop_loss": sl,
                         "tp1": c + 1.0 * rd,
-                        "tp2": c + 2.0 * rd,
-                        "tp3": c + 3.5 * rd,
+                        "tp2": c + 2.8 * rd,
+                        "tp3": c + 4.0 * rd,
                         "reason": "Institutional overlap volume continuation off dynamic EMA 20"
                     }
             elif ema20 < ema50 and last["high"] >= ema20 * 0.998 and c < ema20 and c < last["open"]:
@@ -159,8 +159,8 @@ class SessionHunterStrategy(BaseStrategy):
                         "entry": c,
                         "stop_loss": sl,
                         "tp1": c - 1.0 * rd,
-                        "tp2": c - 2.0 * rd,
-                        "tp3": c - 3.5 * rd,
+                        "tp2": c - 2.8 * rd,
+                        "tp3": c - 4.0 * rd,
                         "reason": "Institutional overlap volume continuation off dynamic EMA 20 resistance"
                     }
 

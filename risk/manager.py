@@ -55,7 +55,7 @@ class RiskManager:
                 stop_loss = entry - risk_distance
 
             tp1_r = self.risk_cfg.get("tp1_r", 1.0)
-            tp2_r = self.risk_cfg.get("tp2_r", max(2.5, min_rr))
+            tp2_r = self.risk_cfg.get("tp2_r", 2.8)
             tp3_r = self.risk_cfg.get("tp3_r", 4.0)
 
             # Take Profit ladder
@@ -75,7 +75,7 @@ class RiskManager:
                 stop_loss = entry + risk_distance
 
             tp1_r = self.risk_cfg.get("tp1_r", 1.0)
-            tp2_r = self.risk_cfg.get("tp2_r", max(2.5, min_rr))
+            tp2_r = self.risk_cfg.get("tp2_r", 2.8)
             tp3_r = self.risk_cfg.get("tp3_r", 4.0)
 
             tp1 = entry - (tp1_r * risk_distance)
